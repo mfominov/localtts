@@ -1,0 +1,38 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local macOS files
+.DS_Store
+
+# Generated audio and playlists
+output_audio/*
+!output_audio/.gitkeep
+*.aiff
+*.wav
+*.mp3
+*.m4a
+*.m3u
+
+# Local source documents (optional, keep private)
+*.pdf
+
+# Local chapter maps
+chapters.txt
+
+# Piper voice models
+models/*.onnx
+models/*.onnx.json
+!models/.gitkeep

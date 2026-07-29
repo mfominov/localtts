@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LocalTTS</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #0c1412;
+      --ink-2: #14201c;
+      --panel: #182622;
+      --line: rgba(214, 232, 220, 0.1);
+      --text: #e7f0ea;
+      --text-dim: #9bb0a5;
+      --mark: #d8f56a;
+      --mark-soft: rgba(216, 245, 106, 0.22);
+      --glow: rgba(88, 170, 140, 0.18);
+      --danger: #ff9b8a;
+      --radius: 18px;
+      --sidebar: 300px;
+      --rail: 36px;
+      --reader-width: clamp(22rem, 46vw, 38rem);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Outfit", sans-serif;
+      background:
+        radial-gradient(900px 500px at 85% -10%, rgba(90, 160, 130, 0.18), transparent 55%),
+        radial-gradient(700px 480px at -10% 90%, rgba(210, 240, 120, 0.08), transparent 50%),
+        linear-gradient(160deg, #101a17 0%, var(--ink) 45%, #0a100f 100%);
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.035;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--rail);
+      grid-template-rows: 1fr auto;
+      height: 100vh;
+      position: relative;
+      z-index: 1;
+    }
+
+    aside {
+      padding: 1.35rem 1rem 1rem;
+      border-right: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(20, 34, 30, 0.88), rgba(12, 20, 18, 0.72));
+      backdrop-filter: blur(10px);
+      overflow: auto;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      margin: 0 0.4rem 1.2rem;
+    }
+    .brand strong {
+      font-size: 0.78rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--mark);
+      font-weight: 600;
+    }
+    .brand span {
+      color: var(--text-dim);
+      font-size: 0.85rem;
+    }
+
+    #chapters {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .chapter {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      padding: 0.8rem 0.85rem;
+      border-radius: 14px;
+      cursor: pointer;
+      font: inherit;
+      transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
+    }
+    .chapter:hover {
+      background: rgba(231, 240, 234, 0.04);
+      border-color: var(--line);
+    }
+    .chapter.active {
+      background: linear-gradient(135deg, rgba(216, 245, 106, 0.12), rgba(88, 170, 140, 0.1));
+      border-color: rgba(216, 245, 106, 0.28);
+      box-shadow: 0 0 0 1px rgba(216, 245, 106, 0.05) inset;
+    }
+    .chapter .label {
+      display: block;
+      font-size: 0.92rem;
+      font-weight: 500;
+      line-height: 1.35;
+    }
+    .chapter small {
+      display: block;
+      margin-top: 0.35rem;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      letter-spacing: 0.02em;
+    }
+
+    .chapter-block {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .sections {
+      display: none;
+      flex-direction: column;
+      gap: 0.15rem;
+      margin: 0 0 0.35rem 0.55rem;
+      padding-left: 0.65rem;
+      border-left: 1px solid rgba(216, 245, 106, 0.22);
+      max-height: min(42vh, 420px);
+      overflow: auto;
+    }
+    .chapter-block.open .sections {
+      display: flex;
+      animation: rise 280ms ease both;
+    }
+
+    .section {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      text-align: left;
+      padding: 0.4rem 0.55rem;
+      border-radius: 10px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.8rem;
+      line-height: 1.3;
+      transition: background 160ms ease, color 160ms ease;
+    }
+    .section:hover {
+      background: rgba(231, 240, 234, 0.05);
+      color: var(--text);
+    }
+    .section.active {
+      color: var(--mark);
+      background: rgba(216, 245, 106, 0.08);
+    }
+    .section .sec-time {
+      display: block;
+      margin-top: 0.15rem;
+      font-size: 0.7rem;
+      opacity: 0.75;
+    }
+
+    main {
+      overflow: auto;
+      padding: 2.6rem clamp(1.2rem, 4vw, 3.5rem) 2.4rem;
+      scroll-behavior: smooth;
+      min-width: 0;
+    }
+
+    .stage {
+      width: min(100%, var(--reader-width));
+      margin: 0 auto;
+    }
+
+    .reader {
+      min-width: 0;
+      animation: rise 420ms ease both;
+    }
+
+    #title {
+      margin: 0 0 1.7rem;
+      font-family: "Literata", Georgia, serif;
+      font-size: clamp(1.5rem, 2.5vw, 2rem);
+      font-weight: 600;
+      line-height: 1.3;
+      letter-spacing: -0.02em;
+    }
+
+    #text {
+      font-family: "Literata", Georgia, serif;
+      font-size: 1.22rem;
+      line-height: 2.05;
+      letter-spacing: 0.01em;
+      font-optical-sizing: auto;
+      color: rgba(231, 240, 234, 0.94);
+      text-align: left;
+      text-wrap: pretty;
+    }
+
+    .section-heading {
+      font-family: "Outfit", sans-serif;
+      font-size: 1.1rem;
+      font-weight: 600;
+      line-height: 1.4;
+      letter-spacing: -0.015em;
+      color: var(--mark);
+      margin: 2.1rem 0 0.85rem;
+      padding: 0.65rem 0.8rem;
+      border-left: 3px solid rgba(216, 245, 106, 0.7);
+      background: linear-gradient(90deg, rgba(216, 245, 106, 0.1), transparent 70%);
+      border-radius: 0 10px 10px 0;
+      cursor: pointer;
+    }
+    .section-heading:first-child {
+      margin-top: 0.2rem;
+    }
+    .section-heading:hover {
+      background: linear-gradient(90deg, rgba(216, 245, 106, 0.16), transparent 75%);
+    }
+    .section-heading .sec-id {
+      display: inline-block;
+      margin-right: 0.4rem;
+      opacity: 0.85;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sentence {
+      border-radius: 0.3em;
+      padding: 0.08em 0.14em;
+      cursor: pointer;
+      transition: background 160ms ease, box-shadow 160ms ease, color 160ms ease;
+    }
+    .sentence:hover {
+      background: rgba(231, 240, 234, 0.06);
+    }
+    .sentence.active {
+      background: var(--mark-soft);
+      box-shadow: 0 2px 0 rgba(216, 245, 106, 0.55);
+      color: #f4ffe0;
+    }
+
+    .progress-rail {
+      grid-column: 3;
+      grid-row: 1;
+      height: 100%;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 0.45rem;
+      justify-items: center;
+      align-content: stretch;
+      padding: 0.85rem 0 0.7rem;
+      border-left: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(20, 34, 30, 0.55), rgba(12, 20, 18, 0.35));
+      user-select: none;
+    }
+
+    .progress-track {
+      position: relative;
+      width: 6px;
+      height: 100%;
+      min-height: 0;
+      border-radius: 999px;
+      background: rgba(231, 240, 234, 0.1);
+      cursor: pointer;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(231, 240, 234, 0.05);
+    }
+
+    .progress-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 0%;
+      border-radius: inherit;
+      background: linear-gradient(180deg, #e7ff8f, #d8f56a 40%, #6fb897);
+      transition: height 120ms linear;
+    }
+
+    .progress-thumb {
+      position: absolute;
+      left: 50%;
+      top: 0%;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--mark);
+      box-shadow: 0 0 0 4px var(--glow);
+      transform: translate(-50%, -50%);
+      transition: top 120ms linear;
+      pointer-events: none;
+    }
+
+    .progress-label {
+      color: var(--text-dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .dock {
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--line);
+      background: rgba(10, 16, 14, 0.88);
+      backdrop-filter: blur(14px);
+      padding: 0.9rem 1.1rem 1rem;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 0.9rem 1rem;
+      align-items: center;
+    }
+
+    .transport {
+      display: flex;
+      gap: 0.45rem;
+      align-items: center;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(231, 240, 234, 0.04);
+      color: var(--text);
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
+    }
+    .btn:hover {
+      background: rgba(216, 245, 106, 0.12);
+      border-color: rgba(216, 245, 106, 0.35);
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn.primary {
+      width: 48px;
+      height: 48px;
+      background: var(--mark);
+      color: #132018;
+      border-color: transparent;
+    }
+    .btn.primary:hover {
+      background: #e7ff8f;
+    }
+    .btn svg {
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+
+    .scrub {
+      display: grid;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+    .times {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-dim);
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+    }
+    #seek {
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(231, 240, 234, 0.12);
+      outline: none;
+      cursor: pointer;
+    }
+    #seek::-webkit-slider-thumb {
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--mark);
+      box-shadow: 0 0 0 4px var(--glow);
+    }
+
+    .meta {
+      color: var(--text-dim);
+      font-size: 0.8rem;
+      text-align: right;
+      line-height: 1.35;
+      min-width: 9rem;
+    }
+    .meta strong {
+      display: block;
+      color: var(--text);
+      font-weight: 500;
+      margin-bottom: 0.15rem;
+    }
+
+    audio { display: none; }
+
+    .error {
+      padding: 3rem;
+      color: var(--danger);
+      font-size: 1rem;
+      max-width: 36rem;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 1100px) {
+      :root {
+        --reader-width: clamp(20rem, 58vw, 36rem);
+      }
+    }
+
+    @media (max-width: 860px) {
+      :root {
+        --sidebar: 100%;
+        --rail: 28px;
+        --reader-width: min(100%, 36rem);
+      }
+      .shell {
+        grid-template-columns: minmax(0, 1fr) var(--rail);
+        grid-template-rows: 148px 1fr auto;
+      }
+      aside {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      main {
+        grid-column: 1;
+        grid-row: 2;
+        padding: 1.4rem 1rem 1.2rem;
+      }
+      .progress-rail {
+        grid-column: 2;
+        grid-row: 2;
+        padding: 0.55rem 0;
+      }
+      .dock {
+        grid-column: 1 / -1;
+        grid-template-columns: auto 1fr;
+      }
+      .meta {
+        grid-column: 1 / -1;
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell" id="app">
+    <aside>
+      <div class="brand">
+        <strong>LocalTTS</strong>
+        <span>Чтение + прослушивание</span>
+      </div>
+      <div id="chapters"></div>
+    </aside>
+
+    <main>
+      <div class="stage">
+        <article class="reader">
+          <h1 id="title">Загрузка…</h1>
+          <div id="text"></div>
+        </article>
+      </div>
+    </main>
+
+    <div class="progress-rail" aria-label="Прогресс главы">
+      <div class="progress-track" id="progressTrack" title="Клик — перейти к позиции">
+        <div class="progress-fill" id="progressFill"></div>
+        <div class="progress-thumb" id="progressThumb"></div>
+      </div>
+      <div class="progress-label" id="progressLabel">0%</div>
+    </div>
+
+    <div class="dock">
+      <div class="transport">
+        <button class="btn" id="prev" type="button" title="Предыдущая глава" aria-label="Предыдущая глава">
+          <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+        </button>
+        <button class="btn primary" id="play" type="button" title="Play/Pause" aria-label="Play/Pause">
+          <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="btn" id="next" type="button" title="Следующая глава" aria-label="Следующая глава">
+          <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+        </button>
+      </div>
+
+      <div class="scrub">
+        <div class="times">
+          <span id="curTime">0:00</span>
+          <span id="durTime">0:00</span>
+        </div>
+        <input id="seek" type="range" min="0" max="0" step="0.01" value="0" />
+      </div>
+
+      <div class="meta">
+        <strong id="chapterMeta">—</strong>
+        <span id="status">—</span>
+      </div>
+    </div>
+
+    <audio id="audio" preload="metadata"></audio>
+  </div>
+
+  <script>
+    const chaptersEl = document.getElementById("chapters");
+    const titleEl = document.getElementById("title");
+    const textEl = document.getElementById("text");
+    const audioEl = document.getElementById("audio");
+    const statusEl = document.getElementById("status");
+    const chapterMetaEl = document.getElementById("chapterMeta");
+    const curTimeEl = document.getElementById("curTime");
+    const durTimeEl = document.getElementById("durTime");
+    const seekEl = document.getElementById("seek");
+    const playBtn = document.getElementById("play");
+    const playIcon = document.getElementById("playIcon");
+    const prevBtn = document.getElementById("prev");
+    const nextBtn = document.getElementById("next");
+    const progressTrack = document.getElementById("progressTrack");
+    const progressFill = document.getElementById("progressFill");
+    const progressThumb = document.getElementById("progressThumb");
+    const progressLabel = document.getElementById("progressLabel");
+
+    const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
+    const ICON_PAUSE = '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>';
+
+    let manifest = null;
+    let currentIndex = 0;
+    let currentSectionId = null;
+    let sentenceNodes = [];
+    let seeking = false;
+
+    function formatTime(sec) {
+      if (!Number.isFinite(sec) || sec < 0) return "0:00";
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function setPlayingUi(playing) {
+      playIcon.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+    }
+
+    function chapterDuration() {
+      const chapter = manifest?.chapters?.[currentIndex];
+      const fromAudio = audioEl.duration;
+      if (Number.isFinite(fromAudio) && fromAudio > 0) return fromAudio;
+      return Number(chapter?.duration) || 0;
+    }
+
+    function updateProgress(time) {
+      const duration = chapterDuration();
+      const ratio = duration > 0 ? Math.min(1, Math.max(0, time / duration)) : 0;
+      const pct = Math.round(ratio * 100);
+      progressFill.style.height = `${pct}%`;
+      progressThumb.style.top = `${pct}%`;
+      progressLabel.textContent = `${pct}%`;
+    }
+
+    function seekFromProgressEvent(event) {
+      const rect = progressTrack.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+      const duration = chapterDuration();
+      if (duration <= 0) return;
+      seekTo(duration * ratio);
+    }
+
+    function activeSectionForTime(chapter, time) {
+      const sections = chapter.sections || [];
+      let active = null;
+      for (const section of sections) {
+        if (time >= section.start) active = section;
+        else break;
+      }
+      return active;
+    }
+
+    function updateSectionUi(section) {
+      const sectionId = section ? section.id : null;
+      currentSectionId = sectionId;
+      chaptersEl.querySelectorAll(".section").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.sectionId === sectionId);
+      });
+    }
+
+    function displayText(value) {
+      let text = String(value || "");
+      text = text.replace(/эй[\s\-–—]*ай/gi, "AI");
+      text = text.replace(/и\s+и(?=-)/g, "ИИ");
+      // Replace rightmost "и и" pairs so "и и и" -> "и ИИ".
+      const ii = /(^|[^A-Za-zА-Яа-яЁё0-9-])и\s+и(?![A-Za-zА-Яа-яЁё0-9-])/g;
+      let prev;
+      do {
+        prev = text;
+        let last = null;
+        let match;
+        ii.lastIndex = 0;
+        while ((match = ii.exec(text)) !== null) last = match;
+        if (!last) break;
+        const start = last.index + last[1].length;
+        text = text.slice(0, start) + "ИИ" + text.slice(last.index + last[0].length);
+      } while (text !== prev);
+      return text;
+    }
+
+    function escapeRegExp(value) {
+      return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function stripSectionPrefix(text, section) {
+      let body = String(text || "").trim();
+      const sectionId = section.id;
+      body = body.replace(
+        new RegExp(`^[\\s\\[\\(\«\"']*${escapeRegExp(sectionId)}\\.?\\s+`, "i"),
+        ""
+      );
+      const titleText = headingLabel(section).text.replace(/…$/, "").trim();
+      if (titleText) {
+        const titlePattern = new RegExp(
+          `^${escapeRegExp(titleText)}(?:\\s*[.!?…:—–-]\\s*|\\s+)`,
+          "i"
+        );
+        body = body.replace(titlePattern, "");
+      }
+      return body.trim();
+    }
+
+    function headingLabel(section) {
+      let raw = displayText(String(section.title || section.id || ""));
+      raw = raw.replace(new RegExp(`^${escapeRegExp(section.id)}\\.?\\s*`), "");
+      if (!raw) raw = section.id;
+      return {
+        id: section.id,
+        text: raw,
+      };
+    }
+
+    function seekTo(time, { play = true } = {}) {
+      const target = Math.max(0, time);
+      const apply = () => {
+        try {
+          audioEl.currentTime = target;
+        } catch (_) {
+          // Ignore until media is seekable.
+        }
+        seekEl.value = String(target);
+        curTimeEl.textContent = formatTime(target);
+        highlightAt(target);
+        if (play) {
+          const playPromise = audioEl.play();
+          if (playPromise && typeof playPromise.catch === "function") {
+            playPromise.catch(() => {});
+          }
+        }
+      };
+
+      if (audioEl.readyState >= 1) {
+        apply();
+        // Some browsers only honor mid-file seeks after canplay.
+        if (Math.abs((audioEl.currentTime || 0) - target) > 1) {
+          audioEl.addEventListener("canplay", apply, { once: true });
+        }
+      } else {
+        audioEl.addEventListener("loadedmetadata", apply, { once: true });
+      }
+    }
+
+    function loadChapter(index, { autoplay = false, startAt = 0 } = {}) {
+      currentIndex = index;
+      const chapter = manifest.chapters[index];
+      titleEl.textContent = chapter.title;
+      chapterMetaEl.textContent = chapter.title;
+      const reader = titleEl.closest(".reader");
+      reader.style.animation = "none";
+      reader.offsetHeight;
+      reader.style.animation = "";
+
+      textEl.innerHTML = "";
+      const sectionByCue = new Map(
+        (chapter.sections || []).map((section) => [section.cueIndex, section])
+      );
+      sentenceNodes = chapter.cues.map((cue, i) => {
+        const section = sectionByCue.get(i);
+        if (section) {
+          const heading = document.createElement("h3");
+          heading.className = "section-heading";
+          const parts = headingLabel(section);
+          heading.innerHTML = `<span class="sec-id">${parts.id}</span>${parts.text}`;
+          heading.addEventListener("click", () => seekTo(section.start + 0.01));
+          textEl.appendChild(heading);
+        }
+
+        const span = document.createElement("span");
+        span.className = "sentence";
+        span.dataset.index = String(i);
+        const bodyText = section
+          ? stripSectionPrefix(cue.text, section)
+          : cue.text;
+        span.textContent = displayText(bodyText || cue.text) + " ";
+        span.addEventListener("click", () => seekTo(cue.start + 0.01));
+        textEl.appendChild(span);
+        return span;
+      });
+
+      chaptersEl.querySelectorAll(".chapter-block").forEach((block, i) => {
+        block.classList.toggle("open", i === index);
+        block.querySelector(".chapter")?.classList.toggle("active", i === index);
+      });
+
+      // Keep active section list visible.
+      const openBlock = chaptersEl.querySelector(`.chapter-block[data-chapter-index="${index}"]`);
+      openBlock?.scrollIntoView({ block: "nearest" });
+
+      seekEl.max = String(chapter.duration || 0);
+      seekEl.value = String(startAt || 0);
+      durTimeEl.textContent = formatTime(chapter.duration);
+      curTimeEl.textContent = formatTime(startAt || 0);
+      statusEl.textContent = `Глава ${index + 1} из ${manifest.chapters.length}`;
+
+      const nextSrc = chapter.audio;
+      const currentName = decodeURIComponent((audioEl.src || "").split("/").pop() || "");
+      if (currentName !== nextSrc) {
+        audioEl.src = nextSrc;
+        audioEl.load();
+      }
+      seekTo(startAt || 0, { play: autoplay });
+    }
+
+    function highlightAt(time) {
+      const chapter = manifest.chapters[currentIndex];
+      let active = 0;
+      for (let i = 0; i < chapter.cues.length; i++) {
+        if (time >= chapter.cues[i].start) active = i;
+        else break;
+      }
+      sentenceNodes.forEach((node, i) => {
+        const on = i === active;
+        if (node.classList.contains("active") === on) return;
+        node.classList.toggle("active", on);
+        if (on) node.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+
+      const section = activeSectionForTime(chapter, time);
+      updateSectionUi(section);
+      const sectionLabel = section ? ` · ${section.id}` : "";
+      statusEl.textContent = `Предложение ${active + 1} / ${chapter.cues.length}${sectionLabel}`;
+      updateProgress(time);
+    }
+
+    function renderSidebar() {
+      chaptersEl.innerHTML = "";
+      manifest.chapters.forEach((chapter, index) => {
+        const block = document.createElement("div");
+        block.className = "chapter-block";
+        block.dataset.chapterIndex = String(index);
+
+        const btn = document.createElement("button");
+        btn.className = "chapter";
+        btn.type = "button";
+        const sectionCount = (chapter.sections || []).length;
+        const sectionMeta = sectionCount ? ` · ${sectionCount} разд.` : "";
+        btn.innerHTML = `<span class="label">${chapter.title}</span><small>${formatTime(chapter.duration)} · ${chapter.cues.length} предл.${sectionMeta}</small>`;
+        btn.addEventListener("click", () => loadChapter(index, { autoplay: true }));
+        block.appendChild(btn);
+
+        if (sectionCount) {
+          const list = document.createElement("div");
+          list.className = "sections";
+          chapter.sections.forEach((section) => {
+            const secBtn = document.createElement("button");
+            secBtn.className = "section";
+            secBtn.type = "button";
+            secBtn.dataset.sectionId = section.id;
+            secBtn.innerHTML = `${displayText(section.title)}<span class="sec-time">${formatTime(section.start)}</span>`;
+            secBtn.addEventListener("click", (event) => {
+              event.stopPropagation();
+              if (currentIndex !== index) {
+                loadChapter(index, { autoplay: true, startAt: section.start + 0.01 });
+              } else {
+                seekTo(section.start + 0.01);
+              }
+            });
+            list.appendChild(secBtn);
+          });
+          block.appendChild(list);
+        }
+
+        chaptersEl.appendChild(block);
+      });
+    }
+
+    playBtn.addEventListener("click", () => {
+      if (audioEl.paused) audioEl.play();
+      else audioEl.pause();
+    });
+    prevBtn.addEventListener("click", () => {
+      if (currentIndex > 0) loadChapter(currentIndex - 1, { autoplay: true });
+    });
+    nextBtn.addEventListener("click", () => {
+      if (currentIndex + 1 < manifest.chapters.length) {
+        loadChapter(currentIndex + 1, { autoplay: true });
+      }
+    });
+
+    seekEl.addEventListener("pointerdown", () => { seeking = true; });
+    seekEl.addEventListener("pointerup", () => {
+      seeking = false;
+      audioEl.currentTime = Number(seekEl.value);
+    });
+    seekEl.addEventListener("input", () => {
+      const value = Number(seekEl.value);
+      curTimeEl.textContent = formatTime(value);
+      highlightAt(value);
+    });
+
+    progressTrack.addEventListener("click", seekFromProgressEvent);
+
+    audioEl.addEventListener("play", () => setPlayingUi(true));
+    audioEl.addEventListener("pause", () => setPlayingUi(false));
+    audioEl.addEventListener("timeupdate", () => {
+      if (!seeking) {
+        seekEl.value = String(audioEl.currentTime);
+        curTimeEl.textContent = formatTime(audioEl.currentTime);
+      }
+      highlightAt(audioEl.currentTime);
+    });
+    audioEl.addEventListener("loadedmetadata", () => {
+      if (Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
+        seekEl.max = String(audioEl.duration);
+        durTimeEl.textContent = formatTime(audioEl.duration);
+      }
+    });
+    audioEl.addEventListener("ended", () => {
+      if (currentIndex + 1 < manifest.chapters.length) {
+        loadChapter(currentIndex + 1, { autoplay: true });
+      } else {
+        setPlayingUi(false);
+      }
+    });
+
+    fetch("./manifest.json")
+      .then((r) => {
+        if (!r.ok) throw new Error("manifest.json не найден. Сначала сделай make run / make run-chapters.");
+        return r.json();
+      })
+      .then((data) => {
+        manifest = data;
+        if (!manifest.chapters?.length) throw new Error("В manifest нет глав.");
+        renderSidebar();
+        loadChapter(0);
+      })
+      .catch((err) => {
+        document.getElementById("app").innerHTML = `<div class="error">${err.message}</div>`;
+      });
+  </script>
+</body>
+</html>
