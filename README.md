@@ -36,8 +36,52 @@ make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
 Отдельные targets:
 - `make listen-say` / `make run-chapters-say` — macOS `say`
 - `make listen-piper` / `make run-chapters-piper` — Piper Irina
+- `make listen-silero` / `make run-chapters-silero` — Silero (Xenia и др.)
+- `make listen-f5tts` / `make run-chapters-f5tts` — F5-TTS (клонирование по ref)
 
 Это скачает модель `ru_RU-irina-medium` (~63 MB) и поставит `piper-tts` + `espeak-ng`.
+
+## Silero TTS
+
+Ещё один локальный нейро-голос (часто звучит естественнее Piper на русском). Нужны `torch` + `silero` (~сотни MB при первой установке):
+
+```bash
+make install-silero
+make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+```
+
+Голоса: `xenia` (по умолчанию), `aidar`, `baya`, `kseniya`, `eugene`.
+
+```bash
+FORCE=1 make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt \
+  SILERO_SPEAKER=aidar SILERO_SAMPLE_RATE=48000
+```
+
+Модель по умолчанию — `v5_ru` (латиница в тексте ок; для вопросов — `SILERO_MODEL=v5_5_ru`).
+Не используйте `v5_2_ru` на документах с английскими словами — там падает обработка латиницы.
+
+## F5-TTS (клонирование голоса)
+
+Нейро-TTS с референс-аудио. По умолчанию — русская модель [Misha24-10/F5-TTS_RUSSIAN](https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN) (~1.3 GB при первой загрузке):
+
+```bash
+make install-f5tts
+FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+```
+
+`install-f5tts` создаёт `models/f5_ref_ru.wav` через macOS `say` (голос `VOICE`, по умолчанию Milena). Свой референс (лучше 5–15 сек чистой речи):
+
+```bash
+FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt \
+  F5_REF_AUDIO=./my_voice.wav F5_REF_TEXT="Точный текст референса"
+```
+
+Если `F5_REF_TEXT` пустой, берётся соседний `.txt` или ASR транскрипт референса.
+Ускорение: `F5_NFE_STEP=16`. Устройство по умолчанию на macOS — `cpu`
+(у F5 внутри ThreadPoolExecutor, а PyTorch MPS не потокобезопасен → SIGSEGV).
+`F5_DEVICE=mps` можно попробовать, но часто падает.
+
+Отдельные targets: `make listen-f5tts` / `make run-chapters-f5tts`.
 
 ## Браузерный плеер (текст + аудио)
 
@@ -47,14 +91,18 @@ make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
 make listen-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=4
 # или
 make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
+# или
+make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+# или
+make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 ```
 
-`make listen-say` / `make listen-piper` сначала делают нарезку, затем открывают плеер.
+`make listen-say` / `make listen-piper` / `make listen-silero` / `make listen-f5tts` сначала делают нарезку, затем открывают плеер.
 Если в `OUT_DIR` уже есть `manifest.json`, повторный `listen-*` **не** пересобирает аудио (и не чистит файлы) — только открывает плеер.
 Пересборка с нуля (сначала удалит wav/aiff в `OUT_DIR`):
 
 ```bash
-FORCE=1 make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=4
+FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 ```
 
 Только открыть готовое:
@@ -146,6 +194,8 @@ make run-chapters-say PDF=./doc.pdf
 make run-chapters-say PDF=./doc.pdf CHAPTER_PAGES=20
 make run-chapters-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 make run-chapters-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make run-chapters-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make run-chapters-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 ```
 
 ## Параллельная генерация

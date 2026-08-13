@@ -4,7 +4,7 @@ Convert a PDF document to local audio files on macOS.
 
 Uses:
 - pypdf for text extraction
-- built-in `say` command for offline TTS
+- built-in `say`, Piper, Silero, or F5-TTS for offline TTS
 """
 
 from __future__ import annotations
@@ -17,8 +17,20 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import wave
 from collections.abc import Sequence
 from typing import Any
+
+# Silero apply_tts is happier with shorter inputs; we stitch parts together.
+SILERO_MAX_CHARS = 900
+_silero_lock = threading.Lock()
+_silero_models: dict[str, Any] = {}
+
+DEFAULT_F5_CKPT = "hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base_v2/model_last_inference.safetensors"
+DEFAULT_F5_VOCAB = "hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base/vocab.txt"
+_f5_lock = threading.Lock()
+_f5_models: dict[str, Any] = {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,19 +58,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--voice",
         default="Milena",
-        help="macOS `say` voice name (default: Milena). Ignored for Piper.",
+        help="macOS `say` voice name (default: Milena). Ignored for Piper/Silero/F5.",
     )
     parser.add_argument(
         "--engine",
-        choices=["say", "piper"],
+        choices=["say", "piper", "silero", "f5tts"],
         default="say",
-        help="TTS engine: macOS say (default) or local Piper neural voice",
+        help="TTS engine: macOS say (default), Piper, Silero, or F5-TTS",
     )
     parser.add_argument(
         "--piper-model",
         type=pathlib.Path,
         default=pathlib.Path("models/ru_RU-irina-medium.onnx"),
         help="Path to Piper .onnx model (default: models/ru_RU-irina-medium.onnx)",
+    )
+    parser.add_argument(
+        "--silero-model",
+        default="v5_ru",
+        help="Silero model id (default: v5_ru; also v5_5_ru, v4_ru, …)",
+    )
+    parser.add_argument(
+        "--silero-speaker",
+        default="xenia",
+        help="Silero speaker: aidar, baya, kseniya, xenia, eugene (default: xenia)",
+    )
+    parser.add_argument(
+        "--silero-sample-rate",
+        type=int,
+        choices=[8000, 24000, 48000],
+        default=24000,
+        help="Silero sample rate (default: 24000)",
+    )
+    parser.add_argument(
+        "--f5-model",
+        default="F5TTS_v1_Base",
+        help="F5-TTS architecture config name (default: F5TTS_v1_Base)",
+    )
+    parser.add_argument(
+        "--f5-ckpt",
+        default=DEFAULT_F5_CKPT,
+        help="F5-TTS checkpoint path or hf:// URL (default: Russian F5TTS_v1_Base_v2)",
+    )
+    parser.add_argument(
+        "--f5-vocab",
+        default=DEFAULT_F5_VOCAB,
+        help="F5-TTS vocab.txt path or hf:// URL",
+    )
+    parser.add_argument(
+        "--f5-ref-audio",
+        type=pathlib.Path,
+        default=pathlib.Path("models/f5_ref_ru.wav"),
+        help="Reference WAV for F5 voice cloning (default: models/f5_ref_ru.wav)",
+    )
+    parser.add_argument(
+        "--f5-ref-text",
+        default="",
+        help="Transcript of reference audio (default: read models/f5_ref_ru.txt or ASR)",
+    )
+    parser.add_argument(
+        "--f5-device",
+        default="",
+        help="F5 device: cpu/mps/cuda (default: cpu on macOS — MPS races and segfaults)",
+    )
+    parser.add_argument(
+        "--f5-nfe-step",
+        type=int,
+        default=32,
+        help="F5 ODE steps (default: 32; lower=faster)",
+    )
+    parser.add_argument(
+        "--f5-speed",
+        type=float,
+        default=1.0,
+        help="F5 speaking speed (default: 1.0)",
     )
     parser.add_argument(
         "--mode",
@@ -555,26 +627,74 @@ def convert_aiff_to_wav(aiff_file: pathlib.Path) -> pathlib.Path:
     return wav_file
 
 
+def speech_weight(text: str) -> float:
+    """Estimate relative speaking time (not pure character count).
+
+    Latin tokens, digits and abbreviations are slower for RU voices; punctuation
+    adds pauses. Without this, highlight drifts ahead of Piper/say audio.
+    """
+    weight = 0.0
+    for char in text:
+        if "A" <= char <= "Z" or "a" <= char <= "z":
+            weight += 1.65
+        elif char.isalpha():
+            weight += 1.0
+        elif char.isdigit():
+            weight += 1.85
+        elif char in ".!?…":
+            weight += 10.0
+        elif char in ",;:—–":
+            weight += 3.5
+        elif char.isspace():
+            weight += 0.12
+        else:
+            weight += 0.55
+
+    weight += 5.0 * len(re.findall(r"\b[A-Z]{2,}\b", text))
+    weight += 2.5 * len(re.findall(r"\d+(?:[.,]\d+)+", text))
+    weight += 1.8 * len(re.findall(r"[/\\|]", text))
+    return max(weight, 1.0)
+
+
 def build_sentence_cues(text: str, duration: float) -> list[dict[str, Any]]:
     sentences = split_sentences(text)
     if not sentences:
         return [{"start": 0.0, "end": duration, "text": strip_speech_markup(text)}]
 
-    weights = [max(len(sentence), 1) for sentence in sentences]
-    total_weight = float(sum(weights))
-    cues: list[dict[str, Any]] = []
+    return retime_cues(
+        [{"text": sentence} for sentence in sentences],
+        duration,
+    )
+
+
+def retime_cues(cues: list[dict[str, Any]], duration: float) -> list[dict[str, Any]]:
+    if not cues:
+        return []
+    if duration <= 0:
+        return [
+            {
+                "start": float(cue.get("start") or 0.0),
+                "end": float(cue.get("end") or 0.0),
+                "text": str(cue.get("text", "")),
+            }
+            for cue in cues
+        ]
+
+    weights = [speech_weight(str(cue.get("text", ""))) for cue in cues]
+    total_weight = float(sum(weights)) or 1.0
+    timed: list[dict[str, Any]] = []
     cursor = 0.0
-    for idx, (sentence, weight) in enumerate(zip(sentences, weights, strict=False)):
-        end = duration if idx == len(sentences) - 1 else cursor + duration * (weight / total_weight)
-        cues.append(
+    for idx, (cue, weight) in enumerate(zip(cues, weights, strict=False)):
+        end = duration if idx == len(cues) - 1 else cursor + duration * (weight / total_weight)
+        timed.append(
             {
                 "start": round(cursor, 3),
                 "end": round(end, 3),
-                "text": sentence,
+                "text": str(cue.get("text", "")),
             }
         )
         cursor = end
-    return cues
+    return timed
 
 
 SECTION_AT_START = re.compile(
@@ -688,9 +808,12 @@ def refresh_web_manifest(output_dir: pathlib.Path) -> pathlib.Path:
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for chapter in manifest.get("chapters", []):
-        for cue in chapter.get("cues") or []:
+        duration = float(chapter.get("duration") or 0.0)
+        cues = chapter.get("cues") or []
+        for cue in cues:
             cue["text"] = section_refs_for_display(str(cue.get("text", "")))
-    enrich_manifest_sections(manifest)
+        chapter["cues"] = retime_cues(cues, duration)
+        chapter["sections"] = extract_sections_from_cues(chapter["cues"])
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -762,17 +885,251 @@ def synthesize_with_piper(model: pathlib.Path, text: str, output_file: pathlib.P
     )
 
 
+def load_silero_model(model_id: str) -> Any:
+    with _silero_lock:
+        cached = _silero_models.get(model_id)
+        if cached is not None:
+            return cached
+        try:
+            from silero import silero_tts
+        except ImportError as exc:
+            raise RuntimeError("Silero deps missing. Install with: make install-silero") from exc
+
+        # Do not call model.to()/eval() — packaged Silero wrappers break on that.
+        model, _example = silero_tts(language="ru", speaker=model_id)
+        _silero_models[model_id] = model
+        return model
+
+
+def write_wav_mono_f32(path: pathlib.Path, audio: Any, sample_rate: int) -> None:
+    import torch
+
+    if not isinstance(audio, torch.Tensor):
+        audio = torch.as_tensor(audio)
+    pcm = audio.detach().cpu().float().reshape(-1).clamp(-1.0, 1.0)
+    samples = (pcm * 32767.0).round().to(torch.int16).numpy().tobytes()
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(samples)
+
+
+def synthesize_with_silero(
+    model_id: str,
+    speaker: str,
+    sample_rate: int,
+    text: str,
+    output_file: pathlib.Path,
+) -> None:
+    import torch
+
+    spoken = strip_speech_markup(text)
+    if not spoken:
+        raise RuntimeError(f"Empty text for Silero synthesis: {output_file.name}")
+
+    model = load_silero_model(model_id)
+    parts = chunk_text(spoken, max_chars=SILERO_MAX_CHARS)
+    pieces: list[Any] = []
+    with _silero_lock:
+        for part in parts:
+            audio = model.apply_tts(text=part, speaker=speaker, sample_rate=sample_rate)
+            if audio is None:
+                raise RuntimeError(f"Silero returned empty audio for {output_file.name}")
+            pieces.append(torch.as_tensor(audio).detach().cpu().float().reshape(-1))
+
+    if not pieces:
+        raise RuntimeError(f"Silero produced no audio for {output_file.name}")
+
+    if len(pieces) == 1:
+        joined = pieces[0]
+    else:
+        gap = torch.zeros(int(sample_rate * 0.12), dtype=torch.float32)
+        joined_parts: list[Any] = []
+        for idx, piece in enumerate(pieces):
+            joined_parts.append(piece)
+            if idx < len(pieces) - 1:
+                joined_parts.append(gap)
+        joined = torch.cat(joined_parts)
+
+    wav_file = output_file.with_suffix(".wav")
+    write_wav_mono_f32(wav_file, joined, sample_rate)
+    subprocess.run(
+        ["afconvert", "-f", "AIFF", "-d", "BEI16", str(wav_file), str(output_file)],
+        check=True,
+    )
+
+
+def resolve_f5_path(path_or_url: str) -> str:
+    if path_or_url.startswith("hf://"):
+        try:
+            from cached_path import cached_path
+        except ImportError as exc:
+            raise RuntimeError("F5-TTS deps missing. Install with: make install-f5tts") from exc
+        return str(cached_path(path_or_url))
+    local = pathlib.Path(path_or_url)
+    if not local.exists():
+        raise RuntimeError(f"F5 path not found: {path_or_url}")
+    return str(local)
+
+
+def resolve_f5_ref_text(ref_text: str, ref_audio: pathlib.Path) -> str:
+    if ref_text.strip():
+        return ref_text.strip()
+    sibling = ref_audio.with_suffix(".txt")
+    if sibling.exists():
+        return sibling.read_text(encoding="utf-8").strip()
+    # Empty string triggers F5 ASR transcription of the reference clip.
+    return ""
+
+
+def resolve_f5_device(device: str) -> str:
+    """Pick a stable device for F5-TTS.
+
+    On macOS, F5-TTS auto-selects MPS, but its internal ThreadPoolExecutor
+    races MetalShaderLibrary and segfaults (SIGSEGV in abs_kernel_mps). Prefer
+    CPU unless the user explicitly requests mps/cuda.
+    """
+    if device.strip():
+        return device.strip()
+    if sys.platform == "darwin":
+        return "cpu"
+    return ""
+
+
+def load_f5_model(
+    model_name: str,
+    ckpt: str,
+    vocab: str,
+    device: str,
+) -> Any:
+    resolved_device = resolve_f5_device(device)
+    cache_key = f"{model_name}|{ckpt}|{vocab}|{resolved_device or 'auto'}"
+    with _f5_lock:
+        cached = _f5_models.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            from f5_tts.api import F5TTS
+        except ImportError as exc:
+            raise RuntimeError("F5-TTS deps missing. Install with: make install-f5tts") from exc
+
+        ckpt_file = resolve_f5_path(ckpt)
+        vocab_file = resolve_f5_path(vocab)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "ckpt_file": ckpt_file,
+            "vocab_file": vocab_file,
+        }
+        if resolved_device:
+            kwargs["device"] = resolved_device
+        if resolved_device == "cpu" and not device.strip() and sys.platform == "darwin":
+            print(
+                "F5-TTS: using CPU (MPS is unstable with F5's thread pool; "
+                "override with F5_DEVICE=mps at your own risk)",
+                flush=True,
+            )
+        model = F5TTS(**kwargs)
+        _f5_models[cache_key] = model
+        return model
+
+
+def synthesize_with_f5tts(
+    model_name: str,
+    ckpt: str,
+    vocab: str,
+    ref_audio: pathlib.Path,
+    ref_text: str,
+    device: str,
+    nfe_step: int,
+    speed: float,
+    text: str,
+    output_file: pathlib.Path,
+) -> None:
+    spoken = strip_speech_markup(text)
+    if not spoken:
+        raise RuntimeError(f"Empty text for F5-TTS synthesis: {output_file.name}")
+    if not ref_audio.exists():
+        raise RuntimeError(
+            f"F5 reference audio not found: {ref_audio}. "
+            "Run: make install-f5tts (creates models/f5_ref_ru.wav) "
+            "or pass --f5-ref-audio /path/to/ref.wav"
+        )
+
+    model = load_f5_model(model_name, ckpt, vocab, device)
+    resolved_ref_text = resolve_f5_ref_text(ref_text, ref_audio)
+    wav_file = output_file.with_suffix(".wav")
+
+    def _quiet(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    with _f5_lock:
+        wav, _sr, _spec = model.infer(
+            ref_file=str(ref_audio),
+            ref_text=resolved_ref_text,
+            gen_text=spoken,
+            file_wave=str(wav_file),
+            nfe_step=nfe_step,
+            speed=speed,
+            show_info=_quiet,
+            progress=None,
+        )
+    if wav is None or not wav_file.exists() or wav_file.stat().st_size == 0:
+        raise RuntimeError(f"F5-TTS produced no audio for {output_file.name}")
+
+    subprocess.run(
+        ["afconvert", "-f", "AIFF", "-d", "BEI16", str(wav_file), str(output_file)],
+        check=True,
+    )
+
+
 def synthesize_chunk(
     voice: str,
     text: str,
     output_file: pathlib.Path,
     engine: str = "say",
     piper_model: pathlib.Path | None = None,
+    silero_model: str = "v5_ru",
+    silero_speaker: str = "xenia",
+    silero_sample_rate: int = 24000,
+    f5_model: str = "F5TTS_v1_Base",
+    f5_ckpt: str = DEFAULT_F5_CKPT,
+    f5_vocab: str = DEFAULT_F5_VOCAB,
+    f5_ref_audio: pathlib.Path | None = None,
+    f5_ref_text: str = "",
+    f5_device: str = "",
+    f5_nfe_step: int = 32,
+    f5_speed: float = 1.0,
 ) -> None:
     if engine == "piper":
         if piper_model is None:
             raise RuntimeError("Piper model path is required for engine=piper")
         synthesize_with_piper(piper_model, text, output_file)
+        return
+    if engine == "silero":
+        synthesize_with_silero(
+            silero_model,
+            silero_speaker,
+            silero_sample_rate,
+            text,
+            output_file,
+        )
+        return
+    if engine == "f5tts":
+        if f5_ref_audio is None:
+            raise RuntimeError("F5 reference audio is required for engine=f5tts")
+        synthesize_with_f5tts(
+            f5_model,
+            f5_ckpt,
+            f5_vocab,
+            f5_ref_audio,
+            f5_ref_text,
+            f5_device,
+            f5_nfe_step,
+            f5_speed,
+            text,
+            output_file,
+        )
         return
     synthesize_with_say(voice, text, output_file)
 
@@ -782,6 +1139,17 @@ def synthesize_job(
     voice: str,
     engine: str,
     piper_model: pathlib.Path | None,
+    silero_model: str,
+    silero_speaker: str,
+    silero_sample_rate: int,
+    f5_model: str,
+    f5_ckpt: str,
+    f5_vocab: str,
+    f5_ref_audio: pathlib.Path | None,
+    f5_ref_text: str,
+    f5_device: str,
+    f5_nfe_step: int,
+    f5_speed: float,
 ) -> tuple[int, pathlib.Path]:
     idx, output_file, text = job
     synthesize_chunk(
@@ -790,6 +1158,17 @@ def synthesize_job(
         output_file,
         engine=engine,
         piper_model=piper_model,
+        silero_model=silero_model,
+        silero_speaker=silero_speaker,
+        silero_sample_rate=silero_sample_rate,
+        f5_model=f5_model,
+        f5_ckpt=f5_ckpt,
+        f5_vocab=f5_vocab,
+        f5_ref_audio=f5_ref_audio,
+        f5_ref_text=f5_ref_text,
+        f5_device=f5_device,
+        f5_nfe_step=f5_nfe_step,
+        f5_speed=f5_speed,
     )
     return idx, output_file
 
@@ -800,24 +1179,64 @@ def run_jobs(
     workers: int,
     engine: str = "say",
     piper_model: pathlib.Path | None = None,
+    silero_model: str = "v5_ru",
+    silero_speaker: str = "xenia",
+    silero_sample_rate: int = 24000,
+    f5_model: str = "F5TTS_v1_Base",
+    f5_ckpt: str = DEFAULT_F5_CKPT,
+    f5_vocab: str = DEFAULT_F5_VOCAB,
+    f5_ref_audio: pathlib.Path | None = None,
+    f5_ref_text: str = "",
+    f5_device: str = "",
+    f5_nfe_step: int = 32,
+    f5_speed: float = 1.0,
 ) -> list[pathlib.Path]:
+    common = dict(
+        engine=engine,
+        piper_model=piper_model,
+        silero_model=silero_model,
+        silero_speaker=silero_speaker,
+        silero_sample_rate=silero_sample_rate,
+        f5_model=f5_model,
+        f5_ckpt=f5_ckpt,
+        f5_vocab=f5_vocab,
+        f5_ref_audio=f5_ref_audio,
+        f5_ref_text=f5_ref_text,
+        f5_device=f5_device,
+        f5_nfe_step=f5_nfe_step,
+        f5_speed=f5_speed,
+    )
     if workers <= 1:
         result: list[pathlib.Path] = []
         for idx, output_file, text in jobs:
-            synthesize_chunk(
-                voice,
-                text,
-                output_file,
-                engine=engine,
-                piper_model=piper_model,
-            )
+            synthesize_chunk(voice, text, output_file, **common)
             result.append(output_file)
             print(f"[{idx}/{len(jobs)}] {output_file.name}")
         return result
 
     completed: list[tuple[int, pathlib.Path]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(synthesize_job, job, voice, engine, piper_model) for job in jobs]
+        futures = [
+            executor.submit(
+                synthesize_job,
+                job,
+                voice,
+                engine,
+                piper_model,
+                silero_model,
+                silero_speaker,
+                silero_sample_rate,
+                f5_model,
+                f5_ckpt,
+                f5_vocab,
+                f5_ref_audio,
+                f5_ref_text,
+                f5_device,
+                f5_nfe_step,
+                f5_speed,
+            )
+            for job in jobs
+        ]
         for future in concurrent.futures.as_completed(futures):
             idx, output_file = future.result()
             completed.append((idx, output_file))
@@ -859,6 +1278,27 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+    if args.engine == "silero":
+        try:
+            load_silero_model(args.silero_model)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    if args.engine == "f5tts":
+        if not args.f5_ref_audio.exists():
+            print(
+                f"F5 reference audio not found: {args.f5_ref_audio}. Run: make install-f5tts",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            load_f5_model(args.f5_model, args.f5_ckpt, args.f5_vocab, args.f5_device)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"Failed to load F5-TTS model: {exc}", file=sys.stderr)
+            return 1
 
     if args.pdf is None:
         print("PDF path is required (or use --refresh-web).", file=sys.stderr)
@@ -892,8 +1332,29 @@ def main() -> int:
 
     audio_files: list[pathlib.Path] = []
     web_items: list[tuple[str, pathlib.Path, str]] = []
-    engine_label = (
-        f"piper:{args.piper_model.name}" if args.engine == "piper" else f"say:{args.voice}"
+    if args.engine == "piper":
+        engine_label = f"piper:{args.piper_model.name}"
+    elif args.engine == "silero":
+        engine_label = f"silero:{args.silero_model}/{args.silero_speaker}"
+    elif args.engine == "f5tts":
+        engine_label = f"f5tts:{args.f5_ref_audio.name}"
+    else:
+        engine_label = f"say:{args.voice}"
+
+    job_kwargs = dict(
+        engine=args.engine,
+        piper_model=args.piper_model,
+        silero_model=args.silero_model,
+        silero_speaker=args.silero_speaker,
+        silero_sample_rate=args.silero_sample_rate,
+        f5_model=args.f5_model,
+        f5_ckpt=args.f5_ckpt,
+        f5_vocab=args.f5_vocab,
+        f5_ref_audio=args.f5_ref_audio,
+        f5_ref_text=args.f5_ref_text,
+        f5_device=args.f5_device,
+        f5_nfe_step=args.f5_nfe_step,
+        f5_speed=args.f5_speed,
     )
 
     if args.mode == "chapters":
@@ -931,8 +1392,7 @@ def main() -> int:
             chapter_jobs,
             args.voice,
             args.jobs,
-            engine=args.engine,
-            piper_model=args.piper_model,
+            **job_kwargs,
         )
         web_items = [(titles_by_idx[idx], out_file, text) for idx, out_file, text in chapter_jobs]
     else:
@@ -950,8 +1410,7 @@ def main() -> int:
             chunk_jobs,
             args.voice,
             args.jobs,
-            engine=args.engine,
-            piper_model=args.piper_model,
+            **job_kwargs,
         )
         web_items = [(f"Часть {idx}", out_file, text) for idx, out_file, text in chunk_jobs]
 

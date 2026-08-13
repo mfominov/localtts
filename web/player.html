@@ -550,12 +550,70 @@
     let currentSectionId = null;
     let sentenceNodes = [];
     let seeking = false;
+    // Highlight slightly behind wall-clock audio; estimates still drift a bit.
+    const HIGHLIGHT_LAG_SEC = 0.45;
 
     function formatTime(sec) {
       if (!Number.isFinite(sec) || sec < 0) return "0:00";
       const m = Math.floor(sec / 60);
       const s = Math.floor(sec % 60);
       return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function speechWeight(text) {
+      let weight = 0;
+      for (const char of String(text || "")) {
+        if ((char >= "A" && char <= "Z") || (char >= "a" && char <= "z")) weight += 1.65;
+        else if (/\p{L}/u.test(char)) weight += 1.0;
+        else if (/\d/.test(char)) weight += 1.85;
+        else if (".!?…".includes(char)) weight += 10.0;
+        else if (",;:—–".includes(char)) weight += 3.5;
+        else if (/\s/.test(char)) weight += 0.12;
+        else weight += 0.55;
+      }
+      const abbr = String(text || "").match(/\b[A-Z]{2,}\b/g);
+      const nums = String(text || "").match(/\d+(?:[.,]\d+)+/g);
+      const slashes = String(text || "").match(/[/\\|]/g);
+      weight += 5.0 * (abbr ? abbr.length : 0);
+      weight += 2.5 * (nums ? nums.length : 0);
+      weight += 1.8 * (slashes ? slashes.length : 0);
+      return Math.max(weight, 1);
+    }
+
+    function retimeCues(cues, duration) {
+      if (!Array.isArray(cues) || !cues.length || !(duration > 0)) return cues || [];
+      const weights = cues.map((cue) => speechWeight(cue.text));
+      const total = weights.reduce((sum, value) => sum + value, 0) || 1;
+      let cursor = 0;
+      return cues.map((cue, idx) => {
+        const end = idx === cues.length - 1
+          ? duration
+          : cursor + duration * (weights[idx] / total);
+        const next = {
+          ...cue,
+          start: Math.round(cursor * 1000) / 1000,
+          end: Math.round(end * 1000) / 1000,
+        };
+        cursor = end;
+        return next;
+      });
+    }
+
+    function retimeManifest(data) {
+      data.chapters.forEach((chapter) => {
+        const duration = Number(chapter.duration) || 0;
+        chapter.cues = retimeCues(chapter.cues || [], duration);
+        // Keep section starts aligned with retimed cues.
+        if (Array.isArray(chapter.sections)) {
+          chapter.sections = chapter.sections.map((section) => {
+            const cue = chapter.cues[section.cueIndex];
+            return cue
+              ? { ...section, start: cue.start }
+              : section;
+          });
+        }
+      });
+      return data;
     }
 
     function setPlayingUi(playing) {
@@ -658,15 +716,16 @@
 
     function seekTo(time, { play = true } = {}) {
       const target = Math.max(0, time);
-      const apply = () => {
-        try {
-          audioEl.currentTime = target;
-        } catch (_) {
-          // Ignore until media is seekable.
-        }
-        seekEl.value = String(target);
-        curTimeEl.textContent = formatTime(target);
-        highlightAt(target);
+      let finished = false;
+      let seekStarted = false;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        const now = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : target;
+        seekEl.value = String(now);
+        curTimeEl.textContent = formatTime(now);
+        highlightAt(now, { lag: false });
         if (play) {
           const playPromise = audioEl.play();
           if (playPromise && typeof playPromise.catch === "function") {
@@ -675,14 +734,39 @@
         }
       };
 
-      if (audioEl.readyState >= 1) {
-        apply();
-        // Some browsers only honor mid-file seeks after canplay.
-        if (Math.abs((audioEl.currentTime || 0) - target) > 1) {
-          audioEl.addEventListener("canplay", apply, { once: true });
+      const startSeek = () => {
+        if (seekStarted) return;
+        seekStarted = true;
+        const current = audioEl.currentTime || 0;
+        if (Math.abs(current - target) < 0.05) {
+          finish();
+          return;
         }
+        audioEl.addEventListener("seeked", finish, { once: true });
+        // Fallback: some engines skip seeked when already near target or after load().
+        window.setTimeout(finish, 350);
+        try {
+          audioEl.currentTime = target;
+        } catch (_) {
+          audioEl.addEventListener(
+            "canplay",
+            () => {
+              try {
+                audioEl.currentTime = target;
+              } catch (__) {
+                finish();
+              }
+            },
+            { once: true }
+          );
+        }
+      };
+
+      if (audioEl.readyState >= 1) {
+        startSeek();
       } else {
-        audioEl.addEventListener("loadedmetadata", apply, { once: true });
+        audioEl.addEventListener("loadedmetadata", startSeek, { once: true });
+        audioEl.addEventListener("canplay", startSeek, { once: true });
       }
     }
 
@@ -707,7 +791,9 @@
           heading.className = "section-heading";
           const parts = headingLabel(section);
           heading.innerHTML = `<span class="sec-id">${parts.id}</span>${parts.text}`;
-          heading.addEventListener("click", () => seekTo(section.start + 0.01));
+          heading.addEventListener("click", () =>
+            seekTo(section.start + 0.01, { play: true })
+          );
           textEl.appendChild(heading);
         }
 
@@ -718,7 +804,7 @@
           ? stripSectionPrefix(cue.text, section)
           : cue.text;
         span.textContent = displayText(bodyText || cue.text) + " ";
-        span.addEventListener("click", () => seekTo(cue.start + 0.01));
+        span.addEventListener("click", () => seekTo(cue.start + 0.01, { play: true }));
         textEl.appendChild(span);
         return span;
       });
@@ -732,10 +818,11 @@
       const openBlock = chaptersEl.querySelector(`.chapter-block[data-chapter-index="${index}"]`);
       openBlock?.scrollIntoView({ block: "nearest" });
 
+      const safeStart = Math.max(0, Number(startAt) || 0);
       seekEl.max = String(chapter.duration || 0);
-      seekEl.value = String(startAt || 0);
+      seekEl.value = String(safeStart);
       durTimeEl.textContent = formatTime(chapter.duration);
-      curTimeEl.textContent = formatTime(startAt || 0);
+      curTimeEl.textContent = formatTime(safeStart);
       statusEl.textContent = `Глава ${index + 1} из ${manifest.chapters.length}`;
 
       const nextSrc = chapter.audio;
@@ -744,14 +831,15 @@
         audioEl.src = nextSrc;
         audioEl.load();
       }
-      seekTo(startAt || 0, { play: autoplay });
+      seekTo(safeStart, { play: autoplay });
     }
 
-    function highlightAt(time) {
+    function highlightAt(time, { lag = true } = {}) {
       const chapter = manifest.chapters[currentIndex];
+      const syncTime = Math.max(0, lag ? time - HIGHLIGHT_LAG_SEC : time);
       let active = 0;
       for (let i = 0; i < chapter.cues.length; i++) {
-        if (time >= chapter.cues[i].start) active = i;
+        if (syncTime >= chapter.cues[i].start) active = i;
         else break;
       }
       sentenceNodes.forEach((node, i) => {
@@ -761,7 +849,7 @@
         if (on) node.scrollIntoView({ block: "center", behavior: "smooth" });
       });
 
-      const section = activeSectionForTime(chapter, time);
+      const section = activeSectionForTime(chapter, syncTime);
       updateSectionUi(section);
       const sectionLabel = section ? ` · ${section.id}` : "";
       statusEl.textContent = `Предложение ${active + 1} / ${chapter.cues.length}${sectionLabel}`;
@@ -795,11 +883,10 @@
             secBtn.innerHTML = `${displayText(section.title)}<span class="sec-time">${formatTime(section.start)}</span>`;
             secBtn.addEventListener("click", (event) => {
               event.stopPropagation();
-              if (currentIndex !== index) {
-                loadChapter(index, { autoplay: true, startAt: section.start + 0.01 });
-              } else {
-                seekTo(section.start + 0.01);
-              }
+              loadChapter(index, {
+                autoplay: true,
+                startAt: section.start + 0.01,
+              });
             });
             list.appendChild(secBtn);
           });
@@ -865,7 +952,7 @@
         return r.json();
       })
       .then((data) => {
-        manifest = data;
+        manifest = retimeManifest(data);
         if (!manifest.chapters?.length) throw new Error("В manifest нет глав.");
         renderSidebar();
         loadChapter(0);
