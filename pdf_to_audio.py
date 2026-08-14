@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import wave
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -1389,6 +1390,32 @@ def synthesize_chunk(
     synthesize_with_say(voice, text, output_file)
 
 
+def format_duration(seconds: float) -> str:
+    """Format seconds as 12s / 2m14s / 1h02m (rounded to whole seconds)."""
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def format_job_progress_line(
+    done: int,
+    total: int,
+    name: str,
+    job_seconds: float,
+    elapsed_seconds: float,
+) -> str:
+    return (
+        f"[{done}/{total}] {name}  "
+        f"+{format_duration(job_seconds)}  "
+        f"elapsed {format_duration(elapsed_seconds)}"
+    )
+
+
 def synthesize_job(
     job: tuple[int, pathlib.Path, str],
     voice: str,
@@ -1406,8 +1433,9 @@ def synthesize_job(
     f5_device: str,
     f5_nfe_step: int,
     f5_speed: float,
-) -> tuple[int, pathlib.Path]:
+) -> tuple[int, pathlib.Path, float]:
     idx, output_file, text = job
+    started = time.perf_counter()
     synthesize_chunk(
         voice,
         text,
@@ -1427,7 +1455,7 @@ def synthesize_job(
         f5_nfe_step=f5_nfe_step,
         f5_speed=f5_speed,
     )
-    return idx, output_file
+    return idx, output_file, time.perf_counter() - started
 
 
 def run_jobs(
@@ -1448,7 +1476,11 @@ def run_jobs(
     f5_device: str = "",
     f5_nfe_step: int = 16,
     f5_speed: float = 1.0,
+    started_at: float | None = None,
 ) -> list[pathlib.Path]:
+    if started_at is None:
+        started_at = time.perf_counter()
+    total = len(jobs)
     common = dict(
         engine=engine,
         piper_model=piper_model,
@@ -1467,13 +1499,25 @@ def run_jobs(
     )
     if workers <= 1:
         result: list[pathlib.Path] = []
-        for idx, output_file, text in jobs:
+        for done, (_idx, output_file, text) in enumerate(jobs, start=1):
+            job_started = time.perf_counter()
             synthesize_chunk(voice, text, output_file, **common)
+            print(
+                format_job_progress_line(
+                    done,
+                    total,
+                    output_file.name,
+                    time.perf_counter() - job_started,
+                    time.perf_counter() - started_at,
+                ),
+                flush=True,
+            )
             result.append(output_file)
-            print(f"[{idx}/{len(jobs)}] {output_file.name}")
         return result
 
     completed: list[tuple[int, pathlib.Path]] = []
+    done = 0
+    done_lock = threading.Lock()
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -1498,9 +1542,21 @@ def run_jobs(
             for job in jobs
         ]
         for future in concurrent.futures.as_completed(futures):
-            idx, output_file = future.result()
+            idx, output_file, job_seconds = future.result()
             completed.append((idx, output_file))
-            print(f"[{idx}/{len(jobs)}] {output_file.name}")
+            with done_lock:
+                done += 1
+                done_now = done
+            print(
+                format_job_progress_line(
+                    done_now,
+                    total,
+                    output_file.name,
+                    job_seconds,
+                    time.perf_counter() - started_at,
+                ),
+                flush=True,
+            )
 
     completed.sort(key=lambda pair: pair[0])
     return [file for _, file in completed]
@@ -1522,6 +1578,8 @@ def main() -> int:
         print(f"Refreshed {manifest}")
         print(f"Sections found: {total_sections}")
         return 0
+
+    started_at = time.perf_counter()
 
     if args.engine == "say" and not shutil.which("say"):
         print("`say` command was not found. This script supports macOS only.", file=sys.stderr)
@@ -1665,6 +1723,7 @@ def main() -> int:
             chapter_jobs,
             args.voice,
             args.jobs,
+            started_at=started_at,
             **job_kwargs,
         )
         web_items = [(titles_by_idx[idx], out_file, text) for idx, out_file, text in chapter_jobs]
@@ -1683,6 +1742,7 @@ def main() -> int:
             chunk_jobs,
             args.voice,
             args.jobs,
+            started_at=started_at,
             **job_kwargs,
         )
         web_items = [(f"Часть {idx}", out_file, text) for idx, out_file, text in chunk_jobs]
@@ -1697,7 +1757,9 @@ def main() -> int:
     playlist = write_playlist(args.out_dir, audio_files)
     print("Building browser player bundle (wav + manifest)...")
     manifest = write_web_bundle(args.out_dir, web_items)
-    print("\nDone.")
+    print(
+        f"\nDone in {format_duration(time.perf_counter() - started_at)} ({len(audio_files)} files)"
+    )
     print(f"Audio chunks: {args.out_dir}")
     print(f"Playlist: {playlist}")
     print(f"Web player: {args.out_dir / 'player.html'}")
