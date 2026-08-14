@@ -1061,6 +1061,27 @@ def write_wav_mono_f32(path: pathlib.Path, audio: Any, sample_rate: int) -> None
         wav.writeframes(samples)
 
 
+_SILERO_LETTER = re.compile(r"[A-Za-zА-Яа-яЁё]")
+
+
+def prepare_silero_text(text: str) -> str:
+    """Normalize glyphs that often break Silero's text pipeline."""
+    text = (
+        text.replace("•", " ")
+        .replace("·", " ")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("−", "-")
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_speakable_for_silero(text: str) -> bool:
+    """Reject empty / digits-only / punctuation-only fragments Silero ValueError's on."""
+    cleaned = prepare_silero_text(text)
+    return bool(cleaned) and _SILERO_LETTER.search(cleaned) is not None
+
+
 def synthesize_with_silero(
     model_id: str,
     speaker: str,
@@ -1071,7 +1092,7 @@ def synthesize_with_silero(
 ) -> list[dict[str, Any]]:
     import torch
 
-    spoken = strip_speech_markup(text)
+    spoken = prepare_silero_text(strip_speech_markup(text))
     if not spoken:
         raise RuntimeError(f"Empty text for Silero synthesis: {output_file.name}")
 
@@ -1086,16 +1107,40 @@ def synthesize_with_silero(
     pieces: list[Any] = []
     cues: list[dict[str, Any]] = []
     cursor_samples = 0
+    skipped = 0
 
     with _silero_lock:
         for idx, sentence in enumerate(sentences):
             parts = chunk_text(sentence, max_chars=SILERO_MAX_CHARS)
             sentence_parts: list[Any] = []
             for part in parts:
-                audio = model.apply_tts(text=part, speaker=speaker, sample_rate=sample_rate)
+                part = prepare_silero_text(part)
+                if not is_speakable_for_silero(part):
+                    skipped += 1
+                    print(
+                        f"Silero skip (not speakable) in {output_file.name}: {part!r}",
+                        flush=True,
+                    )
+                    continue
+                try:
+                    audio = model.apply_tts(text=part, speaker=speaker, sample_rate=sample_rate)
+                except ValueError:
+                    skipped += 1
+                    print(
+                        f"Silero skip (ValueError) in {output_file.name}: {part!r}",
+                        flush=True,
+                    )
+                    continue
                 if audio is None:
-                    raise RuntimeError(f"Silero returned empty audio for {output_file.name}")
+                    skipped += 1
+                    print(
+                        f"Silero skip (empty audio) in {output_file.name}: {part!r}",
+                        flush=True,
+                    )
+                    continue
                 sentence_parts.append(torch.as_tensor(audio).detach().cpu().float().reshape(-1))
+            if not sentence_parts:
+                continue
             if len(sentence_parts) == 1:
                 sentence_audio = sentence_parts[0]
             else:
@@ -1118,7 +1163,14 @@ def synthesize_with_silero(
                 cursor_samples += gap_samples
 
     if not pieces:
-        raise RuntimeError(f"Silero produced no audio for {output_file.name}")
+        raise RuntimeError(
+            f"Silero produced no audio for {output_file.name} (skipped_fragments={skipped})"
+        )
+    if skipped:
+        print(
+            f"Silero skipped {skipped} fragment(s) in {output_file.name}",
+            flush=True,
+        )
 
     joined = pieces[0] if len(pieces) == 1 else torch.cat(pieces)
     wav_file = output_file.with_suffix(".wav")
