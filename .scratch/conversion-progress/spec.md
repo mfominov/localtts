@@ -2,14 +2,14 @@
 
 ## Goal
 
-While converting PDF→audio, the terminal shows per-file progress with wall-clock timing so long Silero/F5 runs are understandable without a web UI.
+While converting PDF→audio, the terminal shows per-file progress with wall-clock timing so long Silero/Piper runs are understandable without a web UI.
 
 ## Decisions (from grilling)
 
 - Surface: **terminal only** (plain lines, always scrolled)
 - Unit: completed **chapter/chunk output files** (`done/N`, not chapter idx)
 - Metrics: **per-file duration** (`+…`) + **elapsed** from start of conversion `main`
-- Engines: all via `run_jobs` (`say` / piper / silero / f5tts)
+- Engines: all via `run_jobs` (`say` / piper / silero)
 - Deps: **stdlib only** (`time`)
 - Model load: no special line; cold start may inflate first file / early elapsed
 - Errors: unchanged (fail the run); printed lines stay

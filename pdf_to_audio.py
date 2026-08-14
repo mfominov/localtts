@@ -4,7 +4,7 @@ Convert a PDF document to local audio files on macOS.
 
 Uses:
 - pypdf for text extraction
-- built-in `say`, Piper, Silero, or F5-TTS for offline TTS
+- built-in `say`, Piper, or Silero for offline TTS
 """
 
 from __future__ import annotations
@@ -31,11 +31,6 @@ DEFAULT_SILERO_SENTENCE_GAP = 0.25
 DEFAULT_PATTERNS_FILE = pathlib.Path(__file__).resolve().parent / "patterns" / "default.yml"
 _silero_lock = threading.Lock()
 _silero_models: dict[str, Any] = {}
-
-DEFAULT_F5_CKPT = "hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base_v2/model_last_inference.safetensors"
-DEFAULT_F5_VOCAB = "hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base/vocab.txt"
-_f5_lock = threading.Lock()
-_f5_models: dict[str, Any] = {}
 
 _REGEX_FLAGS = {
     "IGNORECASE": re.IGNORECASE,
@@ -101,13 +96,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--voice",
         default="Milena",
-        help="macOS `say` voice name (default: Milena). Ignored for Piper/Silero/F5.",
+        help="macOS `say` voice name (default: Milena). Ignored for Piper/Silero.",
     )
     parser.add_argument(
         "--engine",
-        choices=["say", "piper", "silero", "f5tts"],
+        choices=["say", "piper", "silero"],
         default="say",
-        help="TTS engine: macOS say (default), Piper, Silero, or F5-TTS",
+        help="TTS engine: macOS say (default), Piper, or Silero",
     )
     parser.add_argument(
         "--piper-model",
@@ -140,49 +135,6 @@ def parse_args() -> argparse.Namespace:
             "Silence between Silero sentences in seconds "
             f"(default: {DEFAULT_SILERO_SENTENCE_GAP}; enables measured cues)"
         ),
-    )
-    parser.add_argument(
-        "--f5-model",
-        default="F5TTS_v1_Base",
-        help="F5-TTS architecture config name (default: F5TTS_v1_Base)",
-    )
-    parser.add_argument(
-        "--f5-ckpt",
-        default=DEFAULT_F5_CKPT,
-        help="F5-TTS checkpoint path or hf:// URL (default: Russian F5TTS_v1_Base_v2)",
-    )
-    parser.add_argument(
-        "--f5-vocab",
-        default=DEFAULT_F5_VOCAB,
-        help="F5-TTS vocab.txt path or hf:// URL",
-    )
-    parser.add_argument(
-        "--f5-ref-audio",
-        type=pathlib.Path,
-        default=pathlib.Path("models/f5_ref_ru.wav"),
-        help="Reference WAV for F5 voice cloning (default: models/f5_ref_ru.wav)",
-    )
-    parser.add_argument(
-        "--f5-ref-text",
-        default="",
-        help="Transcript of reference audio (default: read models/f5_ref_ru.txt or ASR)",
-    )
-    parser.add_argument(
-        "--f5-device",
-        default="",
-        help="F5 device: cpu/mps/cuda (default: mps on macOS when available)",
-    )
-    parser.add_argument(
-        "--f5-nfe-step",
-        type=int,
-        default=16,
-        help="F5 ODE steps (default: 16; lower=faster, 32=quality)",
-    )
-    parser.add_argument(
-        "--f5-speed",
-        type=float,
-        default=1.0,
-        help="F5 speaking speed (default: 1.0)",
     )
     parser.add_argument(
         "--mode",
@@ -1217,159 +1169,6 @@ def synthesize_with_silero(
     return cues
 
 
-def resolve_f5_path(path_or_url: str) -> str:
-    if path_or_url.startswith("hf://"):
-        try:
-            from cached_path import cached_path
-        except ImportError as exc:
-            raise RuntimeError("F5-TTS deps missing. Install with: make install-f5tts") from exc
-        return str(cached_path(path_or_url))
-    local = pathlib.Path(path_or_url)
-    if not local.exists():
-        raise RuntimeError(f"F5 path not found: {path_or_url}")
-    return str(local)
-
-
-def resolve_f5_ref_text(ref_text: str, ref_audio: pathlib.Path) -> str:
-    if ref_text.strip():
-        return ref_text.strip()
-    sibling = ref_audio.with_suffix(".txt")
-    if sibling.exists():
-        return sibling.read_text(encoding="utf-8").strip()
-    # Empty string triggers F5 ASR transcription of the reference clip.
-    return ""
-
-
-def resolve_f5_device(device: str) -> str:
-    """Pick a device for F5-TTS.
-
-    On macOS prefer MPS when available. F5's infer path uses ThreadPoolExecutor
-    across text chunks — that races Metal and SIGSEGV's unless we force
-    max_workers=1 (see `_ensure_f5_mps_thread_safe`).
-    """
-    if device.strip():
-        return device.strip()
-    if sys.platform == "darwin":
-        try:
-            import torch
-
-            if torch.backends.mps.is_available():
-                return "mps"
-        except Exception:
-            pass
-        return "cpu"
-    return ""
-
-
-def _ensure_f5_mps_thread_safe() -> None:
-    """Serialize F5 chunk inference on MPS (PyTorch Metal is not thread-safe)."""
-    try:
-        import f5_tts.infer.utils_infer as utils_infer
-    except ImportError:
-        return
-    if getattr(utils_infer, "_localtts_mps_serial", False):
-        return
-
-    original = utils_infer.ThreadPoolExecutor
-
-    class _SerialThreadPoolExecutor(original):  # type: ignore[valid-type,misc]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["max_workers"] = 1
-            super().__init__(*args, **kwargs)
-
-    utils_infer.ThreadPoolExecutor = _SerialThreadPoolExecutor
-    utils_infer._localtts_mps_serial = True
-
-
-def load_f5_model(
-    model_name: str,
-    ckpt: str,
-    vocab: str,
-    device: str,
-) -> Any:
-    resolved_device = resolve_f5_device(device)
-    if resolved_device == "mps":
-        _ensure_f5_mps_thread_safe()
-    cache_key = f"{model_name}|{ckpt}|{vocab}|{resolved_device or 'auto'}"
-    with _f5_lock:
-        cached = _f5_models.get(cache_key)
-        if cached is not None:
-            return cached
-        try:
-            from f5_tts.api import F5TTS
-        except ImportError as exc:
-            raise RuntimeError("F5-TTS deps missing. Install with: make install-f5tts") from exc
-
-        ckpt_file = resolve_f5_path(ckpt)
-        vocab_file = resolve_f5_path(vocab)
-        kwargs: dict[str, Any] = {
-            "model": model_name,
-            "ckpt_file": ckpt_file,
-            "vocab_file": vocab_file,
-        }
-        if resolved_device:
-            kwargs["device"] = resolved_device
-        if resolved_device == "mps":
-            print(
-                "F5-TTS: using MPS (chunk ThreadPool forced to 1 worker — safer on Metal)",
-                flush=True,
-            )
-        elif resolved_device == "cpu" and not device.strip() and sys.platform == "darwin":
-            print("F5-TTS: using CPU (MPS unavailable)", flush=True)
-        model = F5TTS(**kwargs)
-        _f5_models[cache_key] = model
-        return model
-
-
-def synthesize_with_f5tts(
-    model_name: str,
-    ckpt: str,
-    vocab: str,
-    ref_audio: pathlib.Path,
-    ref_text: str,
-    device: str,
-    nfe_step: int,
-    speed: float,
-    text: str,
-    output_file: pathlib.Path,
-) -> None:
-    spoken = strip_speech_markup(text)
-    if not spoken:
-        raise RuntimeError(f"Empty text for F5-TTS synthesis: {output_file.name}")
-    if not ref_audio.exists():
-        raise RuntimeError(
-            f"F5 reference audio not found: {ref_audio}. "
-            "Run: make install-f5tts (creates models/f5_ref_ru.wav) "
-            "or pass --f5-ref-audio /path/to/ref.wav"
-        )
-
-    model = load_f5_model(model_name, ckpt, vocab, device)
-    resolved_ref_text = resolve_f5_ref_text(ref_text, ref_audio)
-    wav_file = output_file.with_suffix(".wav")
-
-    def _quiet(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    with _f5_lock:
-        wav, _sr, _spec = model.infer(
-            ref_file=str(ref_audio),
-            ref_text=resolved_ref_text,
-            gen_text=spoken,
-            file_wave=str(wav_file),
-            nfe_step=nfe_step,
-            speed=speed,
-            show_info=_quiet,
-            progress=None,
-        )
-    if wav is None or not wav_file.exists() or wav_file.stat().st_size == 0:
-        raise RuntimeError(f"F5-TTS produced no audio for {output_file.name}")
-
-    subprocess.run(
-        ["afconvert", "-f", "AIFF", "-d", "BEI16", str(wav_file), str(output_file)],
-        check=True,
-    )
-
-
 def synthesize_chunk(
     voice: str,
     text: str,
@@ -1380,14 +1179,6 @@ def synthesize_chunk(
     silero_speaker: str = "xenia",
     silero_sample_rate: int = 24000,
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
-    f5_model: str = "F5TTS_v1_Base",
-    f5_ckpt: str = DEFAULT_F5_CKPT,
-    f5_vocab: str = DEFAULT_F5_VOCAB,
-    f5_ref_audio: pathlib.Path | None = None,
-    f5_ref_text: str = "",
-    f5_device: str = "",
-    f5_nfe_step: int = 16,
-    f5_speed: float = 1.0,
 ) -> None:
     if engine == "piper":
         if piper_model is None:
@@ -1402,22 +1193,6 @@ def synthesize_chunk(
             text,
             output_file,
             sentence_gap=silero_sentence_gap,
-        )
-        return
-    if engine == "f5tts":
-        if f5_ref_audio is None:
-            raise RuntimeError("F5 reference audio is required for engine=f5tts")
-        synthesize_with_f5tts(
-            f5_model,
-            f5_ckpt,
-            f5_vocab,
-            f5_ref_audio,
-            f5_ref_text,
-            f5_device,
-            f5_nfe_step,
-            f5_speed,
-            text,
-            output_file,
         )
         return
     synthesize_with_say(voice, text, output_file)
@@ -1458,14 +1233,6 @@ def synthesize_job(
     silero_speaker: str,
     silero_sample_rate: int,
     silero_sentence_gap: float,
-    f5_model: str,
-    f5_ckpt: str,
-    f5_vocab: str,
-    f5_ref_audio: pathlib.Path | None,
-    f5_ref_text: str,
-    f5_device: str,
-    f5_nfe_step: int,
-    f5_speed: float,
 ) -> tuple[int, pathlib.Path, float]:
     idx, output_file, text = job
     started = time.perf_counter()
@@ -1479,14 +1246,6 @@ def synthesize_job(
         silero_speaker=silero_speaker,
         silero_sample_rate=silero_sample_rate,
         silero_sentence_gap=silero_sentence_gap,
-        f5_model=f5_model,
-        f5_ckpt=f5_ckpt,
-        f5_vocab=f5_vocab,
-        f5_ref_audio=f5_ref_audio,
-        f5_ref_text=f5_ref_text,
-        f5_device=f5_device,
-        f5_nfe_step=f5_nfe_step,
-        f5_speed=f5_speed,
     )
     return idx, output_file, time.perf_counter() - started
 
@@ -1501,14 +1260,6 @@ def run_jobs(
     silero_speaker: str = "xenia",
     silero_sample_rate: int = 24000,
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
-    f5_model: str = "F5TTS_v1_Base",
-    f5_ckpt: str = DEFAULT_F5_CKPT,
-    f5_vocab: str = DEFAULT_F5_VOCAB,
-    f5_ref_audio: pathlib.Path | None = None,
-    f5_ref_text: str = "",
-    f5_device: str = "",
-    f5_nfe_step: int = 16,
-    f5_speed: float = 1.0,
     started_at: float | None = None,
 ) -> list[pathlib.Path]:
     if started_at is None:
@@ -1521,14 +1272,6 @@ def run_jobs(
         silero_speaker=silero_speaker,
         silero_sample_rate=silero_sample_rate,
         silero_sentence_gap=silero_sentence_gap,
-        f5_model=f5_model,
-        f5_ckpt=f5_ckpt,
-        f5_vocab=f5_vocab,
-        f5_ref_audio=f5_ref_audio,
-        f5_ref_text=f5_ref_text,
-        f5_device=f5_device,
-        f5_nfe_step=f5_nfe_step,
-        f5_speed=f5_speed,
     )
     if workers <= 1:
         result: list[pathlib.Path] = []
@@ -1563,14 +1306,6 @@ def run_jobs(
                 silero_speaker,
                 silero_sample_rate,
                 silero_sentence_gap,
-                f5_model,
-                f5_ckpt,
-                f5_vocab,
-                f5_ref_audio,
-                f5_ref_text,
-                f5_device,
-                f5_nfe_step,
-                f5_speed,
             )
             for job in jobs
         ]
@@ -1879,22 +1614,6 @@ def main() -> int:
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-    if args.engine == "f5tts":
-        if not args.f5_ref_audio.exists():
-            print(
-                f"F5 reference audio not found: {args.f5_ref_audio}. Run: make install-f5tts",
-                file=sys.stderr,
-            )
-            return 1
-        try:
-            load_f5_model(args.f5_model, args.f5_ckpt, args.f5_vocab, args.f5_device)
-        except RuntimeError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        except Exception as exc:
-            print(f"Failed to load F5-TTS model: {exc}", file=sys.stderr)
-            return 1
-
     if args.pdf is None:
         print("PDF path is required (or use --refresh-web).", file=sys.stderr)
         return 1
@@ -1943,8 +1662,6 @@ def main() -> int:
         engine_label = f"piper:{args.piper_model.name}"
     elif args.engine == "silero":
         engine_label = f"silero:{args.silero_model}/{args.silero_speaker}"
-    elif args.engine == "f5tts":
-        engine_label = f"f5tts:{args.f5_ref_audio.name}"
     else:
         engine_label = f"say:{args.voice}"
 
@@ -1955,14 +1672,6 @@ def main() -> int:
         silero_speaker=args.silero_speaker,
         silero_sample_rate=args.silero_sample_rate,
         silero_sentence_gap=args.silero_sentence_gap,
-        f5_model=args.f5_model,
-        f5_ckpt=args.f5_ckpt,
-        f5_vocab=args.f5_vocab,
-        f5_ref_audio=args.f5_ref_audio,
-        f5_ref_text=args.f5_ref_text,
-        f5_device=args.f5_device,
-        f5_nfe_step=args.f5_nfe_step,
-        f5_speed=args.f5_speed,
     )
 
     if args.mode == "chapters":

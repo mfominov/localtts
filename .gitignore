@@ -32,10 +32,7 @@ output_audio/*
 # Local chapter maps
 chapters.txt
 
-# Piper / F5 voice assets (large; keep local)
+# Piper voice assets (large; keep local)
 models/*.onnx
 models/*.onnx.json
-models/f5_ref_ru.wav
-models/f5_ref_ru.txt
-models/f5_ref_ru.aiff
 !models/.gitkeep
