@@ -27,6 +27,9 @@ f5tts = [
     "torch>=2.2.0",
     "torchaudio>=2.2.0",
 ]
+audiobook = [
+    "pymupdf>=1.24.0",
+]
 
 [tool.setuptools]
 py-modules = ["pdf_to_audio"]

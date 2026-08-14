@@ -41,13 +41,18 @@ JOBS ?= 1
 KEEP ?= 0
 FORCE ?= 0
 PORT ?= 8765
+COVER ?=
+COVER_PAGE ?= 1
+BOOK_TITLE ?=
+BOOK_AUTHOR ?=
+BITRATE ?= 96k
 
 PIPER_MODEL_URL ?= https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx
 PIPER_CONFIG_URL ?= https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json
 
 F5_REF_SAMPLE_TEXT ?= Это образец голоса для клонирования. Модель будет говорить похожим тембром и интонацией.
 
-.PHONY: help venv install install-piper install-silero install-f5tts run run-chapters run-chapters-say run-chapters-piper run-chapters-silero run-chapters-f5tts play listen listen-say listen-piper listen-silero listen-f5tts serve refresh-web voices clean clean-audio
+.PHONY: help venv install install-piper install-silero install-f5tts install-audiobook run run-chapters run-chapters-say run-chapters-piper run-chapters-silero run-chapters-f5tts play listen listen-say listen-piper listen-silero listen-f5tts serve refresh-web export-audiobook voices clean clean-audio
 
 help:
 	@echo "Targets:"
@@ -69,6 +74,8 @@ help:
 	@echo "  make serve            - only open browser player for existing OUT_DIR"
 	@echo "  make play             - play OUT_DIR/playlist.m3u in VLC"
 	@echo "  make refresh-web      - update player + section markers without re-TTS"
+	@echo "  make export-audiobook - build OUT_DIR/audiobook.m4b (ffmpeg + cover)"
+	@echo "  make install-audiobook - install pymupdf for PDF cover render"
 	@echo "  make clean-audio      - remove generated audio in OUT_DIR"
 	@echo "  make clean            - remove virtual environment"
 	@echo ""
@@ -85,6 +92,7 @@ help:
 	@echo "  MAX_CHARS=$(MAX_CHARS) START_PAGE=$(START_PAGE) END_PAGE=$(END_PAGE)"
 	@echo "  CHAPTER_PAGES=$(CHAPTER_PAGES) CHAPTERS_FILE=$(CHAPTERS_FILE) PATTERNS_FILE=$(PATTERNS_FILE)"
 	@echo "  JOBS=$(JOBS) KEEP=$(KEEP) FORCE=$(FORCE) PORT=$(PORT)"
+	@echo "  COVER=$(COVER) COVER_PAGE=$(COVER_PAGE) BOOK_TITLE=$(BOOK_TITLE) BOOK_AUTHOR=$(BOOK_AUTHOR) BITRATE=$(BITRATE)"
 
 venv:
 	@if [ -x "$(BIN)/python" ]; then \
@@ -136,6 +144,10 @@ print(cached_path('$(F5_CKPT)')); \
 print(cached_path('$(F5_VOCAB)')); \
 print('F5-TTS ready')"
 	@echo "Ref audio: $(F5_REF_AUDIO)"
+
+install-audiobook: install
+	$(BIN)/python -m pip install -e ".[audiobook]"
+	@echo "Audiobook cover render ready (pymupdf). ffmpeg still required: brew install ffmpeg"
 
 voices:
 	say -v "?"
@@ -302,6 +314,30 @@ refresh-web:
 	else \
 		$(PYTHON) $(SCRIPT) --refresh-web --out-dir "$(OUT_DIR)"; \
 	fi
+
+export-audiobook:
+	@command -v ffmpeg >/dev/null 2>&1 || { \
+		echo "ffmpeg not found. Install: brew install ffmpeg"; \
+		exit 1; \
+	}
+	@if [ -z "$(COVER)" ] && [ -z "$(PDF)" ]; then \
+		echo "Usage: make export-audiobook OUT_DIR=$(OUT_DIR) PDF=/path/to.pdf"; \
+		echo "   or: make export-audiobook OUT_DIR=$(OUT_DIR) COVER=/path/to/cover.jpg"; \
+		exit 1; \
+	fi
+	@if [ -x "$(BIN)/python" ]; then \
+		PY="$(BIN)/python"; \
+	else \
+		PY="$(PYTHON)"; \
+	fi; \
+	$$PY $(SCRIPT) \
+		$(if $(PDF),"$(PDF)",) \
+		--export-audiobook --out-dir "$(OUT_DIR)" \
+		$(if $(COVER),--cover "$(COVER)",) \
+		--cover-page "$(COVER_PAGE)" \
+		$(if $(BOOK_TITLE),--book-title "$(BOOK_TITLE)",) \
+		$(if $(BOOK_AUTHOR),--book-author "$(BOOK_AUTHOR)",) \
+		--bitrate "$(BITRATE)"
 
 clean-audio:
 	rm -f "$(OUT_DIR)"/*.aiff "$(OUT_DIR)"/*.wav "$(OUT_DIR)"/*.mp3 "$(OUT_DIR)"/*.m4a "$(OUT_DIR)"/*.m3u "$(OUT_DIR)"/*.txt "$(OUT_DIR)"/*.cues.json

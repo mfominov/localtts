@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import wave
@@ -52,7 +53,7 @@ def parse_args() -> argparse.Namespace:
         type=pathlib.Path,
         nargs="?",
         default=None,
-        help="Path to source PDF (not required with --refresh-web)",
+        help="Path to source PDF (not required with --refresh-web or --export-audiobook + --cover)",
     )
     parser.add_argument(
         "--out-dir",
@@ -64,6 +65,38 @@ def parse_args() -> argparse.Namespace:
         "--refresh-web",
         action="store_true",
         help="Only refresh player.html and section markers in existing manifest.json",
+    )
+    parser.add_argument(
+        "--export-audiobook",
+        action="store_true",
+        help="Build OUT_DIR/audiobook.m4b from existing chapters manifest (needs ffmpeg)",
+    )
+    parser.add_argument(
+        "--cover",
+        type=pathlib.Path,
+        default=None,
+        help="Cover image for --export-audiobook (skips PDF page render)",
+    )
+    parser.add_argument(
+        "--cover-page",
+        type=int,
+        default=1,
+        help="1-indexed PDF page to render as cover (default: 1)",
+    )
+    parser.add_argument(
+        "--book-title",
+        default="",
+        help="Audiobook title metadata (default: PDF stem or OUT_DIR name)",
+    )
+    parser.add_argument(
+        "--book-author",
+        default="",
+        help="Audiobook author/artist metadata (default: LocalTTS)",
+    )
+    parser.add_argument(
+        "--bitrate",
+        default="96k",
+        help="AAC bitrate for --export-audiobook (default: 96k)",
     )
     parser.add_argument(
         "--voice",
@@ -1562,6 +1595,232 @@ def run_jobs(
     return [file for _, file in completed]
 
 
+def require_ffmpeg() -> str:
+    path = shutil.which("ffmpeg")
+    if not path:
+        raise RuntimeError("ffmpeg not found. Install: brew install ffmpeg")
+    return path
+
+
+def default_book_title(pdf: pathlib.Path | None, out_dir: pathlib.Path) -> str:
+    if pdf is not None:
+        stem = pdf.stem.strip()
+        if stem:
+            return stem
+    name = out_dir.resolve().name.strip()
+    return name or "Audiobook"
+
+
+def ffmetadata_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("=", "\\=")
+        .replace(";", "\\;")
+        .replace("#", "\\#")
+        .replace("\n", " ")
+    )
+
+
+def build_ffmetadata(
+    *,
+    title: str,
+    artist: str,
+    chapters: Sequence[tuple[str, float]],
+) -> str:
+    """Build ffmetadata with chapter markers; durations in seconds."""
+    lines = [
+        ";FFMETADATA1",
+        f"title={ffmetadata_escape(title)}",
+        f"artist={ffmetadata_escape(artist)}",
+        f"album={ffmetadata_escape(title)}",
+    ]
+    cursor_ms = 0
+    for chapter_title, duration in chapters:
+        start_ms = cursor_ms
+        end_ms = cursor_ms + max(1, int(round(float(duration) * 1000)))
+        lines.extend(
+            [
+                "[CHAPTER]",
+                "TIMEBASE=1/1000",
+                f"START={start_ms}",
+                f"END={end_ms}",
+                f"title={ffmetadata_escape(chapter_title)}",
+            ]
+        )
+        cursor_ms = end_ms
+    return "\n".join(lines) + "\n"
+
+
+def concat_demuxer_line(path: pathlib.Path) -> str:
+    resolved = path.resolve().as_posix().replace("'", r"'\''")
+    return f"file '{resolved}'"
+
+
+def resolve_chapter_audio_file(out_dir: pathlib.Path, chapter: dict[str, Any]) -> pathlib.Path:
+    audio_name = str(chapter.get("audio") or "").strip()
+    if not audio_name:
+        raise RuntimeError(f"Chapter missing audio field: {chapter.get('title')!r}")
+    wav = out_dir / audio_name
+    if wav.exists() and wav.stat().st_size > 0:
+        return wav
+    aiff = wav.with_suffix(".aiff")
+    if aiff.exists() and aiff.stat().st_size > 0:
+        return convert_aiff_to_wav(aiff)
+    raise RuntimeError(f"Chapter audio not found: {wav.name} (or {aiff.name})")
+
+
+def render_pdf_cover(
+    pdf: pathlib.Path,
+    cover_page: int,
+    dest: pathlib.Path,
+) -> pathlib.Path:
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError(
+            "pymupdf is required to render a cover from PDF. "
+            "Install: make install-audiobook  (or pip install -e '.[audiobook]')"
+        ) from exc
+    if cover_page < 1:
+        raise RuntimeError("--cover-page must be >= 1")
+    doc = fitz.open(pdf)
+    try:
+        if cover_page > doc.page_count:
+            raise RuntimeError(
+                f"--cover-page {cover_page} out of range (PDF has {doc.page_count} page(s))"
+            )
+        page = doc.load_page(cover_page - 1)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        pix.save(str(dest))
+    finally:
+        doc.close()
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise RuntimeError(f"Failed to render cover to {dest}")
+    return dest
+
+
+def prepare_audiobook_cover(
+    *,
+    out_dir: pathlib.Path,
+    pdf: pathlib.Path | None,
+    cover: pathlib.Path | None,
+    cover_page: int,
+) -> pathlib.Path:
+    dest = out_dir / "cover.jpg"
+    if cover is not None:
+        if not cover.exists():
+            raise RuntimeError(f"Cover image not found: {cover}")
+        if cover.resolve() != dest.resolve():
+            shutil.copy2(cover, dest)
+        return dest
+    if pdf is None:
+        raise RuntimeError("PDF path is required to render a cover (or pass --cover / COVER=…).")
+    if not pdf.exists():
+        raise RuntimeError(f"PDF file not found: {pdf}")
+    return render_pdf_cover(pdf, cover_page, dest)
+
+
+def export_audiobook(
+    out_dir: pathlib.Path,
+    *,
+    pdf: pathlib.Path | None = None,
+    cover: pathlib.Path | None = None,
+    cover_page: int = 1,
+    book_title: str = "",
+    book_author: str = "",
+    bitrate: str = "96k",
+) -> pathlib.Path:
+    ffmpeg = require_ffmpeg()
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise RuntimeError(f"manifest.json not found in {out_dir}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    chapters_raw = manifest.get("chapters") or []
+    if not isinstance(chapters_raw, list) or not chapters_raw:
+        raise RuntimeError("manifest.json has no chapters to export")
+
+    audio_files: list[pathlib.Path] = []
+    chapter_meta: list[tuple[str, float]] = []
+    for chapter in chapters_raw:
+        if not isinstance(chapter, dict):
+            continue
+        title = str(chapter.get("title") or "Chapter").strip() or "Chapter"
+        duration = float(chapter.get("duration") or 0)
+        audio_path = resolve_chapter_audio_file(out_dir, chapter)
+        if duration <= 0:
+            duration = audio_duration_seconds(audio_path)
+        audio_files.append(audio_path)
+        chapter_meta.append((title, duration))
+
+    if not audio_files:
+        raise RuntimeError("No chapter audio files found for export")
+
+    title = (book_title or "").strip() or default_book_title(pdf, out_dir)
+    artist = (book_author or "").strip() or "LocalTTS"
+    cover_path = prepare_audiobook_cover(
+        out_dir=out_dir,
+        pdf=pdf,
+        cover=cover,
+        cover_page=cover_page,
+    )
+    output_m4b = out_dir / "audiobook.m4b"
+
+    with tempfile.TemporaryDirectory(prefix="localtts-m4b-") as tmp:
+        tmp_dir = pathlib.Path(tmp)
+        concat_path = tmp_dir / "concat.txt"
+        meta_path = tmp_dir / "ffmetadata.txt"
+        concat_path.write_text(
+            "\n".join(concat_demuxer_line(path) for path in audio_files) + "\n",
+            encoding="utf-8",
+        )
+        meta_path.write_text(
+            build_ffmetadata(title=title, artist=artist, chapters=chapter_meta),
+            encoding="utf-8",
+        )
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_path),
+            "-i",
+            str(meta_path),
+            "-i",
+            str(cover_path),
+            "-map",
+            "0:a",
+            "-map_metadata",
+            "1",
+            "-map",
+            "2:v",
+            "-c:a",
+            "aac",
+            "-b:a",
+            bitrate,
+            "-c:v",
+            "mjpeg",
+            "-disposition:v:0",
+            "attached_pic",
+            "-movflags",
+            "+faststart",
+            str(output_m4b),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(
+                "ffmpeg failed to build audiobook.m4b" + (f":\n{detail}" if detail else "")
+            )
+
+    if not output_m4b.exists() or output_m4b.stat().st_size == 0:
+        raise RuntimeError(f"audiobook.m4b was not created in {out_dir}")
+    return output_m4b
+
+
 def main() -> int:
     args = parse_args()
 
@@ -1577,6 +1836,24 @@ def main() -> int:
         )
         print(f"Refreshed {manifest}")
         print(f"Sections found: {total_sections}")
+        return 0
+
+    if args.export_audiobook:
+        try:
+            m4b = export_audiobook(
+                args.out_dir,
+                pdf=args.pdf,
+                cover=args.cover,
+                cover_page=args.cover_page,
+                book_title=args.book_title,
+                book_author=args.book_author,
+                bitrate=args.bitrate,
+            )
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"Audiobook: {m4b}")
+        print(f"Cover: {args.out_dir / 'cover.jpg'}")
         return 0
 
     started_at = time.perf_counter()

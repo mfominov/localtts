@@ -154,6 +154,27 @@ make serve OUT_DIR=output_audio
 make refresh-web
 ```
 
+## Экспорт аудиокниги (`.m4b`)
+
+После `listen-*` / `run-chapters-*` можно собрать один файл с главами и обложкой для телефона:
+
+```bash
+brew install ffmpeg          # один раз
+make install-audiobook       # pymupdf для обложки из PDF
+
+make export-audiobook OUT_DIR=output_audio PDF=./doc.pdf \
+  BOOK_TITLE="Моя книга" BOOK_AUTHOR="Автор" \
+  COVER_PAGE=1 BITRATE=96k
+```
+
+Результат: `output_audio/audiobook.m4b` и `output_audio/cover.jpg`.
+
+Своя обложка (PDF не нужен):
+
+```bash
+make export-audiobook OUT_DIR=output_audio COVER=./cover.jpg BOOK_TITLE="Моя книга"
+```
+
 ## Навигация по главам
 
 Можно генерировать по одному файлу на главу:
