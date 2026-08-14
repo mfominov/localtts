@@ -601,8 +601,12 @@
 
     function retimeManifest(data) {
       data.chapters.forEach((chapter) => {
+        if (chapter.timing === "measured") {
+          return;
+        }
         const duration = Number(chapter.duration) || 0;
         chapter.cues = retimeCues(chapter.cues || [], duration);
+        chapter.timing = chapter.timing || "estimated";
         // Keep section starts aligned with retimed cues.
         if (Array.isArray(chapter.sections)) {
           chapter.sections = chapter.sections.map((section) => {

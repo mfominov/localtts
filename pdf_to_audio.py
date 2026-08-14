@@ -24,6 +24,7 @@ from typing import Any
 
 # Silero apply_tts is happier with shorter inputs; we stitch parts together.
 SILERO_MAX_CHARS = 900
+DEFAULT_SILERO_SENTENCE_GAP = 0.25
 _silero_lock = threading.Lock()
 _silero_models: dict[str, Any] = {}
 
@@ -90,6 +91,15 @@ def parse_args() -> argparse.Namespace:
         help="Silero sample rate (default: 24000)",
     )
     parser.add_argument(
+        "--silero-sentence-gap",
+        type=float,
+        default=DEFAULT_SILERO_SENTENCE_GAP,
+        help=(
+            "Silence between Silero sentences in seconds "
+            f"(default: {DEFAULT_SILERO_SENTENCE_GAP}; enables measured cues)"
+        ),
+    )
+    parser.add_argument(
         "--f5-model",
         default="F5TTS_v1_Base",
         help="F5-TTS architecture config name (default: F5TTS_v1_Base)",
@@ -118,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--f5-device",
         default="",
-        help="F5 device: cpu/mps/cuda (default: cpu on macOS — MPS races and segfaults)",
+        help="F5 device: cpu/mps/cuda (default: mps on macOS when available)",
     )
     parser.add_argument(
         "--f5-nfe-step",
@@ -581,13 +591,43 @@ def chapter_ranges_from_file(
 
 
 def clean_output_dir(output_dir: pathlib.Path) -> int:
-    patterns = ("*.aiff", "*.wav", "*.mp3", "*.m4a", "*.m3u", "manifest.json")
+    patterns = ("*.aiff", "*.wav", "*.mp3", "*.m4a", "*.m3u", "*.cues.json", "manifest.json")
     removed = 0
     for pattern in patterns:
         for path in output_dir.glob(pattern):
             path.unlink()
             removed += 1
     return removed
+
+
+def cues_sidecar_path(aiff_file: pathlib.Path) -> pathlib.Path:
+    return aiff_file.with_suffix(".cues.json")
+
+
+def write_cues_sidecar(
+    aiff_file: pathlib.Path,
+    cues: list[dict[str, Any]],
+    *,
+    timing: str = "measured",
+) -> pathlib.Path:
+    path = cues_sidecar_path(aiff_file)
+    path.write_text(
+        json.dumps({"timing": timing, "cues": cues}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_cues_sidecar(aiff_file: pathlib.Path) -> tuple[str, list[dict[str, Any]]] | None:
+    path = cues_sidecar_path(aiff_file)
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    cues = data.get("cues") or []
+    if not isinstance(cues, list) or not cues:
+        return None
+    timing = str(data.get("timing") or "measured")
+    return timing, cues
 
 
 def strip_speech_markup(text: str) -> str:
@@ -772,12 +812,18 @@ def write_web_bundle(
         duration = audio_duration_seconds(duration_source)
         display_text = section_refs_for_display(strip_speech_markup(spoken_text))
         aiff_file.with_suffix(".txt").write_text(display_text + "\n", encoding="utf-8")
-        cues = build_sentence_cues(display_text, duration)
+        sidecar = load_cues_sidecar(aiff_file)
+        if sidecar is not None:
+            timing, cues = sidecar
+        else:
+            timing = "estimated"
+            cues = build_sentence_cues(display_text, duration)
         chapters.append(
             {
                 "title": title,
                 "audio": wav_file.name,
                 "duration": round(duration, 3),
+                "timing": timing,
                 "cues": cues,
                 "sections": extract_sections_from_cues(cues),
             }
@@ -812,7 +858,12 @@ def refresh_web_manifest(output_dir: pathlib.Path) -> pathlib.Path:
         cues = chapter.get("cues") or []
         for cue in cues:
             cue["text"] = section_refs_for_display(str(cue.get("text", "")))
-        chapter["cues"] = retime_cues(cues, duration)
+        # Measured cues already match real audio — do not re-apply heuristics.
+        if str(chapter.get("timing") or "") != "measured":
+            chapter["timing"] = "estimated"
+            chapter["cues"] = retime_cues(cues, duration)
+        else:
+            chapter["cues"] = cues
         chapter["sections"] = extract_sections_from_cues(chapter["cues"])
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -921,43 +972,68 @@ def synthesize_with_silero(
     sample_rate: int,
     text: str,
     output_file: pathlib.Path,
-) -> None:
+    sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
+) -> list[dict[str, Any]]:
     import torch
 
     spoken = strip_speech_markup(text)
     if not spoken:
         raise RuntimeError(f"Empty text for Silero synthesis: {output_file.name}")
 
+    sentences = split_sentences(spoken)
+    if not sentences:
+        sentences = [spoken]
+
     model = load_silero_model(model_id)
-    parts = chunk_text(spoken, max_chars=SILERO_MAX_CHARS)
+    gap_samples = max(0, int(sample_rate * max(sentence_gap, 0.0)))
+    gap = torch.zeros(gap_samples, dtype=torch.float32) if gap_samples > 0 else None
+
     pieces: list[Any] = []
+    cues: list[dict[str, Any]] = []
+    cursor_samples = 0
+
     with _silero_lock:
-        for part in parts:
-            audio = model.apply_tts(text=part, speaker=speaker, sample_rate=sample_rate)
-            if audio is None:
-                raise RuntimeError(f"Silero returned empty audio for {output_file.name}")
-            pieces.append(torch.as_tensor(audio).detach().cpu().float().reshape(-1))
+        for idx, sentence in enumerate(sentences):
+            parts = chunk_text(sentence, max_chars=SILERO_MAX_CHARS)
+            sentence_parts: list[Any] = []
+            for part in parts:
+                audio = model.apply_tts(text=part, speaker=speaker, sample_rate=sample_rate)
+                if audio is None:
+                    raise RuntimeError(f"Silero returned empty audio for {output_file.name}")
+                sentence_parts.append(torch.as_tensor(audio).detach().cpu().float().reshape(-1))
+            if len(sentence_parts) == 1:
+                sentence_audio = sentence_parts[0]
+            else:
+                sentence_audio = torch.cat(sentence_parts)
+
+            start = cursor_samples / float(sample_rate)
+            cursor_samples += int(sentence_audio.numel())
+            end = cursor_samples / float(sample_rate)
+            pieces.append(sentence_audio)
+            cues.append(
+                {
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "text": section_refs_for_display(sentence),
+                }
+            )
+
+            if gap is not None and idx < len(sentences) - 1:
+                pieces.append(gap)
+                cursor_samples += gap_samples
 
     if not pieces:
         raise RuntimeError(f"Silero produced no audio for {output_file.name}")
 
-    if len(pieces) == 1:
-        joined = pieces[0]
-    else:
-        gap = torch.zeros(int(sample_rate * 0.12), dtype=torch.float32)
-        joined_parts: list[Any] = []
-        for idx, piece in enumerate(pieces):
-            joined_parts.append(piece)
-            if idx < len(pieces) - 1:
-                joined_parts.append(gap)
-        joined = torch.cat(joined_parts)
-
+    joined = pieces[0] if len(pieces) == 1 else torch.cat(pieces)
     wav_file = output_file.with_suffix(".wav")
     write_wav_mono_f32(wav_file, joined, sample_rate)
     subprocess.run(
         ["afconvert", "-f", "AIFF", "-d", "BEI16", str(wav_file), str(output_file)],
         check=True,
     )
+    write_cues_sidecar(output_file, cues, timing="measured")
+    return cues
 
 
 def resolve_f5_path(path_or_url: str) -> str:
@@ -984,17 +1060,44 @@ def resolve_f5_ref_text(ref_text: str, ref_audio: pathlib.Path) -> str:
 
 
 def resolve_f5_device(device: str) -> str:
-    """Pick a stable device for F5-TTS.
+    """Pick a device for F5-TTS.
 
-    On macOS, F5-TTS auto-selects MPS, but its internal ThreadPoolExecutor
-    races MetalShaderLibrary and segfaults (SIGSEGV in abs_kernel_mps). Prefer
-    CPU unless the user explicitly requests mps/cuda.
+    On macOS prefer MPS when available. F5's infer path uses ThreadPoolExecutor
+    across text chunks — that races Metal and SIGSEGV's unless we force
+    max_workers=1 (see `_ensure_f5_mps_thread_safe`).
     """
     if device.strip():
         return device.strip()
     if sys.platform == "darwin":
+        try:
+            import torch
+
+            if torch.backends.mps.is_available():
+                return "mps"
+        except Exception:
+            pass
         return "cpu"
     return ""
+
+
+def _ensure_f5_mps_thread_safe() -> None:
+    """Serialize F5 chunk inference on MPS (PyTorch Metal is not thread-safe)."""
+    try:
+        import f5_tts.infer.utils_infer as utils_infer
+    except ImportError:
+        return
+    if getattr(utils_infer, "_localtts_mps_serial", False):
+        return
+
+    original = utils_infer.ThreadPoolExecutor
+
+    class _SerialThreadPoolExecutor(original):  # type: ignore[valid-type,misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["max_workers"] = 1
+            super().__init__(*args, **kwargs)
+
+    utils_infer.ThreadPoolExecutor = _SerialThreadPoolExecutor
+    utils_infer._localtts_mps_serial = True
 
 
 def load_f5_model(
@@ -1004,6 +1107,8 @@ def load_f5_model(
     device: str,
 ) -> Any:
     resolved_device = resolve_f5_device(device)
+    if resolved_device == "mps":
+        _ensure_f5_mps_thread_safe()
     cache_key = f"{model_name}|{ckpt}|{vocab}|{resolved_device or 'auto'}"
     with _f5_lock:
         cached = _f5_models.get(cache_key)
@@ -1023,12 +1128,13 @@ def load_f5_model(
         }
         if resolved_device:
             kwargs["device"] = resolved_device
-        if resolved_device == "cpu" and not device.strip() and sys.platform == "darwin":
+        if resolved_device == "mps":
             print(
-                "F5-TTS: using CPU (MPS is unstable with F5's thread pool; "
-                "override with F5_DEVICE=mps at your own risk)",
+                "F5-TTS: using MPS (chunk ThreadPool forced to 1 worker — safer on Metal)",
                 flush=True,
             )
+        elif resolved_device == "cpu" and not device.strip() and sys.platform == "darwin":
+            print("F5-TTS: using CPU (MPS unavailable)", flush=True)
         model = F5TTS(**kwargs)
         _f5_models[cache_key] = model
         return model
@@ -1092,6 +1198,7 @@ def synthesize_chunk(
     silero_model: str = "v5_ru",
     silero_speaker: str = "xenia",
     silero_sample_rate: int = 24000,
+    silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     f5_model: str = "F5TTS_v1_Base",
     f5_ckpt: str = DEFAULT_F5_CKPT,
     f5_vocab: str = DEFAULT_F5_VOCAB,
@@ -1113,6 +1220,7 @@ def synthesize_chunk(
             silero_sample_rate,
             text,
             output_file,
+            sentence_gap=silero_sentence_gap,
         )
         return
     if engine == "f5tts":
@@ -1142,6 +1250,7 @@ def synthesize_job(
     silero_model: str,
     silero_speaker: str,
     silero_sample_rate: int,
+    silero_sentence_gap: float,
     f5_model: str,
     f5_ckpt: str,
     f5_vocab: str,
@@ -1161,6 +1270,7 @@ def synthesize_job(
         silero_model=silero_model,
         silero_speaker=silero_speaker,
         silero_sample_rate=silero_sample_rate,
+        silero_sentence_gap=silero_sentence_gap,
         f5_model=f5_model,
         f5_ckpt=f5_ckpt,
         f5_vocab=f5_vocab,
@@ -1182,6 +1292,7 @@ def run_jobs(
     silero_model: str = "v5_ru",
     silero_speaker: str = "xenia",
     silero_sample_rate: int = 24000,
+    silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     f5_model: str = "F5TTS_v1_Base",
     f5_ckpt: str = DEFAULT_F5_CKPT,
     f5_vocab: str = DEFAULT_F5_VOCAB,
@@ -1197,6 +1308,7 @@ def run_jobs(
         silero_model=silero_model,
         silero_speaker=silero_speaker,
         silero_sample_rate=silero_sample_rate,
+        silero_sentence_gap=silero_sentence_gap,
         f5_model=f5_model,
         f5_ckpt=f5_ckpt,
         f5_vocab=f5_vocab,
@@ -1226,6 +1338,7 @@ def run_jobs(
                 silero_model,
                 silero_speaker,
                 silero_sample_rate,
+                silero_sentence_gap,
                 f5_model,
                 f5_ckpt,
                 f5_vocab,
@@ -1310,6 +1423,9 @@ def main() -> int:
     if args.jobs < 1:
         print("`--jobs` must be >= 1.", file=sys.stderr)
         return 1
+    if args.silero_sentence_gap < 0:
+        print("`--silero-sentence-gap` must be >= 0.", file=sys.stderr)
+        return 1
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     if args.clean_out_dir:
@@ -1347,6 +1463,7 @@ def main() -> int:
         silero_model=args.silero_model,
         silero_speaker=args.silero_speaker,
         silero_sample_rate=args.silero_sample_rate,
+        silero_sentence_gap=args.silero_sentence_gap,
         f5_model=args.f5_model,
         f5_ckpt=args.f5_ckpt,
         f5_vocab=args.f5_vocab,

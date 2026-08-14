@@ -1,4 +1,4 @@
-PYTHON ?= python3
+PYTHON ?= /opt/homebrew/bin/python3.11
 VENV ?= .venv
 BIN := $(VENV)/bin
 SCRIPT := pdf_to_audio.py
@@ -13,6 +13,7 @@ PIPER_MODEL ?= models/ru_RU-irina-medium.onnx
 SILERO_MODEL ?= v5_ru
 SILERO_SPEAKER ?= xenia
 SILERO_SAMPLE_RATE ?= 24000
+SILERO_SENTENCE_GAP ?= 0.25
 F5_MODEL ?= F5TTS_v1_Base
 F5_CKPT ?= hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base_v2/model_last_inference.safetensors
 F5_VOCAB ?= hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base/vocab.txt
@@ -69,12 +70,20 @@ help:
 	@echo "Run options:"
 	@echo "  OUT_DIR=$(OUT_DIR) VOICE=$(VOICE) PIPER_MODEL=$(PIPER_MODEL)"
 	@echo "  SILERO_MODEL=$(SILERO_MODEL) SILERO_SPEAKER=$(SILERO_SPEAKER)"
-	@echo "  SILERO_SAMPLE_RATE=$(SILERO_SAMPLE_RATE)"
+	@echo "  SILERO_SAMPLE_RATE=$(SILERO_SAMPLE_RATE) SILERO_SENTENCE_GAP=$(SILERO_SENTENCE_GAP)"
 	@echo "  F5_REF_AUDIO=$(F5_REF_AUDIO) F5_NFE_STEP=$(F5_NFE_STEP) F5_SPEED=$(F5_SPEED)"
 	@echo "  MAX_CHARS=$(MAX_CHARS) START_PAGE=$(START_PAGE) END_PAGE=$(END_PAGE)"
 	@echo "  CHAPTER_PAGES=$(CHAPTER_PAGES) CHAPTERS_FILE=$(CHAPTERS_FILE) JOBS=$(JOBS) KEEP=$(KEEP) FORCE=$(FORCE) PORT=$(PORT)"
 
 venv:
+	@if [ -x "$(BIN)/python" ]; then \
+		cur="$$($(BIN)/python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"; \
+		want="$$($(PYTHON) -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"; \
+		if [ "$$cur" != "$$want" ]; then \
+			echo "Recreating $(VENV): Python $$cur -> $$want"; \
+			rm -rf "$(VENV)"; \
+		fi; \
+	fi
 	$(PYTHON) -m venv $(VENV)
 	$(BIN)/python -m pip install --upgrade pip
 
@@ -133,6 +142,7 @@ run:
 		--silero-model "$(SILERO_MODEL)" \
 		--silero-speaker "$(SILERO_SPEAKER)" \
 		--silero-sample-rate "$(SILERO_SAMPLE_RATE)" \
+		--silero-sentence-gap "$(SILERO_SENTENCE_GAP)" \
 		--f5-model "$(F5_MODEL)" \
 		--f5-ckpt "$(F5_CKPT)" \
 		--f5-vocab "$(F5_VOCAB)" \
@@ -160,7 +170,7 @@ run-chapters-silero:
 	$(MAKE) run-chapters ENGINE=silero
 
 run-chapters-f5tts:
-	$(MAKE) run-chapters ENGINE=f5tts
+	$(MAKE) run-chapters ENGINE=f5tts JOBS=1
 
 run-chapters:
 	@if [ -z "$(PDF)" ]; then \
@@ -176,6 +186,7 @@ run-chapters:
 		SILERO_MODEL="$(SILERO_MODEL)" \
 		SILERO_SPEAKER="$(SILERO_SPEAKER)" \
 		SILERO_SAMPLE_RATE="$(SILERO_SAMPLE_RATE)" \
+		SILERO_SENTENCE_GAP="$(SILERO_SENTENCE_GAP)" \
 		F5_MODEL="$(F5_MODEL)" \
 		F5_CKPT="$(F5_CKPT)" \
 		F5_VOCAB="$(F5_VOCAB)" \
@@ -218,7 +229,7 @@ listen-silero:
 	$(MAKE) listen ENGINE=silero
 
 listen-f5tts:
-	$(MAKE) listen ENGINE=f5tts
+	$(MAKE) listen ENGINE=f5tts JOBS=1
 
 listen:
 	@if [ "$(FORCE)" != "1" ] && [ -f "$(OUT_DIR)/manifest.json" ]; then \
@@ -240,6 +251,7 @@ listen:
 			SILERO_MODEL="$(SILERO_MODEL)" \
 			SILERO_SPEAKER="$(SILERO_SPEAKER)" \
 			SILERO_SAMPLE_RATE="$(SILERO_SAMPLE_RATE)" \
+			SILERO_SENTENCE_GAP="$(SILERO_SENTENCE_GAP)" \
 			F5_MODEL="$(F5_MODEL)" \
 			F5_CKPT="$(F5_CKPT)" \
 			F5_VOCAB="$(F5_VOCAB)" \
@@ -278,7 +290,7 @@ refresh-web:
 	fi
 
 clean-audio:
-	rm -f "$(OUT_DIR)"/*.aiff "$(OUT_DIR)"/*.wav "$(OUT_DIR)"/*.mp3 "$(OUT_DIR)"/*.m4a "$(OUT_DIR)"/*.m3u "$(OUT_DIR)"/*.txt
+	rm -f "$(OUT_DIR)"/*.aiff "$(OUT_DIR)"/*.wav "$(OUT_DIR)"/*.mp3 "$(OUT_DIR)"/*.m4a "$(OUT_DIR)"/*.m3u "$(OUT_DIR)"/*.txt "$(OUT_DIR)"/*.cues.json
 	rm -f "$(OUT_DIR)/manifest.json" "$(OUT_DIR)/player.html" "$(OUT_DIR)/favicon.svg"
 
 clean:

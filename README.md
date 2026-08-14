@@ -13,9 +13,15 @@
 
 ## Быстрый старт
 
+Нужен **Python 3.11+** (Makefile по умолчанию: `/opt/homebrew/bin/python3.11`).
+
 ```bash
-python3 -m pip install pypdf
-python3 pdf_to_audio.py /path/to/document.pdf --out-dir audio_book --voice Milena
+make install
+# или вручную:
+# /opt/homebrew/bin/python3.11 -m venv .venv && source .venv/bin/activate
+# pip install -e .
+
+.venv/bin/python pdf_to_audio.py /path/to/document.pdf --out-dir audio_book --voice Milena
 ```
 
 Результат:
@@ -60,6 +66,10 @@ FORCE=1 make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt \
 Модель по умолчанию — `v5_ru` (латиница в тексте ок; для вопросов — `SILERO_MODEL=v5_5_ru`).
 Не используйте `v5_2_ru` на документах с английскими словами — там падает обработка латиницы.
 
+Silero синтезирует **по предложениям** и пишет измеренные cues (`timing: measured` в `manifest.json`) —
+подсветка в плеере совпадает с реальной длиной фраз. Пауза между предложениями:
+`SILERO_SENTENCE_GAP=0.25` (секунды). У `say` / Piper / F5 cues по-прежнему оценочные (`speech_weight`).
+
 ## F5-TTS (клонирование голоса)
 
 Нейро-TTS с референс-аудио. По умолчанию — русская модель [Misha24-10/F5-TTS_RUSSIAN](https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN) (~1.3 GB при первой загрузке):
@@ -77,9 +87,10 @@ FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt \
 ```
 
 Если `F5_REF_TEXT` пустой, берётся соседний `.txt` или ASR транскрипт референса.
-Ускорение: `F5_NFE_STEP=16`. Устройство по умолчанию на macOS — `cpu`
-(у F5 внутри ThreadPoolExecutor, а PyTorch MPS не потокобезопасен → SIGSEGV).
-`F5_DEVICE=mps` можно попробовать, но часто падает.
+Ускорение: `F5_NFE_STEP=16`. На macOS по умолчанию — **MPS** (быстрее CPU).
+Внутри F5 режет текст на чанки через `ThreadPoolExecutor`; на Metal это давало SIGSEGV,
+поэтому при `mps` пул принудительно `max_workers=1`. Откат: `F5_DEVICE=cpu`.
+`JOBS` лучше оставить `1` для F5.
 
 Отдельные targets: `make listen-f5tts` / `make run-chapters-f5tts`.
 

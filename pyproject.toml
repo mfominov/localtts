@@ -7,7 +7,7 @@ name = "localtts"
 version = "0.1.0"
 description = "Local macOS PDF to speech utility."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "pypdf>=4.0.0",
 ]
@@ -31,7 +31,7 @@ f5tts = [
 py-modules = ["pdf_to_audio"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 exclude = [".venv", "output_audio", "models"]
 
