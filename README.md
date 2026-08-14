@@ -36,7 +36,7 @@ make install
 
 ```bash
 make install-piper
-make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
+make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 ```
 
 Отдельные targets:
@@ -101,7 +101,8 @@ FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt F5_PRESET=q
 
 Внутри F5 режет текст на чанки через `ThreadPoolExecutor`; на Metal это давало SIGSEGV,
 поэтому при `mps` пул принудительно `max_workers=1`. Откат: `F5_DEVICE=cpu`.
-`JOBS` лучше оставить `1` для F5.
+`make listen-f5tts` / `run-chapters-f5tts` всегда форсят `JOBS=1`.
+Для остальных движков дефолт Makefile: `JOBS=4` (можно переопределить).
 
 Отдельные targets: `make listen-f5tts` / `make run-chapters-f5tts`.
 
@@ -110,9 +111,9 @@ FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt F5_PRESET=q
 После генерации:
 
 ```bash
-make listen-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=4
+make listen-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 # или
-make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
+make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 # или
 make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 # или
@@ -243,10 +244,10 @@ make run-chapters-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 
 ## Параллельная генерация
 
-Чтобы ускорить сборку аудио, можно запустить несколько параллельных воркеров:
+В Makefile дефолт `JOBS=4` (кроме `*-f5tts`, там всегда `1`). Переопределение:
 
 ```bash
-make run-chapters-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=4
+make run-chapters-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
 ```
 
 Или напрямую:
