@@ -223,12 +223,20 @@ make run-chapters-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=4
 python3 pdf_to_audio.py ./doc.pdf --mode chapters --chapters-file ./chapters.txt --jobs 4
 ```
 
-## Как убрать зачитывание номера страницы
+## Как убрать зачитывание номера страницы / TOC
 
-По умолчанию скрипт уже пытается удалять типичные колонтитулы и номера страниц
-из начала/конца каждой страницы (например `... · Название 10`).
+По умолчанию скрипт чистит текст по `patterns/default.yml`:
+- выкидывает строки колонтитулов/номеров страниц;
+- подчищает «прилипшие» footer'ы после нормализации;
+- пропускает страницы, похожие на оглавление (`skip_toc`).
 
-Если нужно отключить эту очистку:
+Свой шаблон:
+
+```bash
+PATTERNS_FILE=./my-clean.yml make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+```
+
+Отключить очистку полностью:
 
 ```bash
 python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts

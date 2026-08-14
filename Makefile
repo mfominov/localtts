@@ -28,6 +28,7 @@ END_PAGE ?= 0
 MODE ?= chunks
 CHAPTER_PAGES ?= 0
 CHAPTERS_FILE ?=
+PATTERNS_FILE ?= patterns/default.yml
 JOBS ?= 1
 KEEP ?= 0
 FORCE ?= 0
@@ -73,7 +74,8 @@ help:
 	@echo "  SILERO_SAMPLE_RATE=$(SILERO_SAMPLE_RATE) SILERO_SENTENCE_GAP=$(SILERO_SENTENCE_GAP)"
 	@echo "  F5_REF_AUDIO=$(F5_REF_AUDIO) F5_NFE_STEP=$(F5_NFE_STEP) F5_SPEED=$(F5_SPEED)"
 	@echo "  MAX_CHARS=$(MAX_CHARS) START_PAGE=$(START_PAGE) END_PAGE=$(END_PAGE)"
-	@echo "  CHAPTER_PAGES=$(CHAPTER_PAGES) CHAPTERS_FILE=$(CHAPTERS_FILE) JOBS=$(JOBS) KEEP=$(KEEP) FORCE=$(FORCE) PORT=$(PORT)"
+	@echo "  CHAPTER_PAGES=$(CHAPTER_PAGES) CHAPTERS_FILE=$(CHAPTERS_FILE) PATTERNS_FILE=$(PATTERNS_FILE)"
+	@echo "  JOBS=$(JOBS) KEEP=$(KEEP) FORCE=$(FORCE) PORT=$(PORT)"
 
 venv:
 	@if [ -x "$(BIN)/python" ]; then \
@@ -158,7 +160,8 @@ run:
 		--chapter-pages "$(CHAPTER_PAGES)" \
 		--jobs "$(JOBS)" \
 		$(if $(filter 1,$(KEEP)),--no-clean-out-dir,) \
-		$(if $(CHAPTERS_FILE),--chapters-file "$(CHAPTERS_FILE)",)
+		$(if $(CHAPTERS_FILE),--chapters-file "$(CHAPTERS_FILE)",) \
+		--patterns-file "$(PATTERNS_FILE)"
 
 run-chapters-say:
 	$(MAKE) run-chapters ENGINE=say
@@ -201,6 +204,7 @@ run-chapters:
 		MODE=chapters \
 		CHAPTER_PAGES="$(CHAPTER_PAGES)" \
 		CHAPTERS_FILE="$(CHAPTERS_FILE)" \
+		PATTERNS_FILE="$(PATTERNS_FILE)" \
 		JOBS="$(JOBS)" \
 		KEEP="$(KEEP)"
 
@@ -265,6 +269,7 @@ listen:
 			END_PAGE="$(END_PAGE)" \
 			CHAPTER_PAGES="$(CHAPTER_PAGES)" \
 			CHAPTERS_FILE="$(CHAPTERS_FILE)" \
+			PATTERNS_FILE="$(PATTERNS_FILE)" \
 			JOBS="$(JOBS)" \
 			KEEP="$(KEEP)"; \
 		$(MAKE) serve OUT_DIR="$(OUT_DIR)" PORT="$(PORT)"; \

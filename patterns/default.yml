@@ -1,0 +1,39 @@
+# PDF text cleaning patterns for localtts.
+# Override with PATTERNS_FILE=./my.yml or --patterns-file ./my.yml
+
+line_drop:
+  # Whole lines removed before normalization
+  - pattern: '^\d{1,4}$'
+  - pattern: '^(?:AI-Disrupt\s+)?PDLC\s*[·•]\s.{1,140}(?:\s+\d{1,4})?$'
+    flags: [IGNORECASE]
+  - pattern: '^.{3,80}\s[|]\s.{1,80}(?:\s+\d{1,4})?$'
+  - pattern: '^(?:AI-Disrupt\s+)?PDLC\s*[·•]'
+    flags: [IGNORECASE]
+
+inline_sub:
+  # Applied after normalize_text (glued footers, orphan page numbers)
+  - pattern: '\s*AI-Disrupt PDLC\s*[·•]\s*Целевое видение\s*(?:\d{1,4})?\s*'
+    repl: ' '
+    flags: [IGNORECASE]
+  - pattern: '\s[\w\-]{2,40}\s+PDLC\s*[·•]\s*[^\d.]{3,80}\s*(?:\d{1,4})?\s*'
+    repl: ' '
+    flags: [IGNORECASE]
+  - pattern: '\s[·•]\s[^\d.]{3,80}\s+\d{1,4}\s*$'
+    repl: ''
+  - pattern: '\s+\d{1,4}\s*$'
+    repl: ''
+
+skip_toc:
+  enabled: true
+  min_lines: 5
+  keywords:
+    - Содержание
+    - Оглавление
+    - Список таблиц
+    - Список рисунков
+    - Table of contents
+  # Fraction of lines that contain a keyword (case-insensitive substring)
+  keyword_line_ratio: 0.12
+  # Dotted leaders like "Глава 1 .......... 12"
+  leader_pattern: '\.{2,}\s*\d{1,4}\s*$'
+  leader_line_ratio: 0.35

@@ -20,11 +20,13 @@ import sys
 import threading
 import wave
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 # Silero apply_tts is happier with shorter inputs; we stitch parts together.
 SILERO_MAX_CHARS = 900
 DEFAULT_SILERO_SENTENCE_GAP = 0.25
+DEFAULT_PATTERNS_FILE = pathlib.Path(__file__).resolve().parent / "patterns" / "default.yml"
 _silero_lock = threading.Lock()
 _silero_models: dict[str, Any] = {}
 
@@ -32,6 +34,12 @@ DEFAULT_F5_CKPT = "hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base_v2/model_last_in
 DEFAULT_F5_VOCAB = "hf://Misha24-10/F5-TTS_RUSSIAN/F5TTS_v1_Base/vocab.txt"
 _f5_lock = threading.Lock()
 _f5_models: dict[str, Any] = {}
+
+_REGEX_FLAGS = {
+    "IGNORECASE": re.IGNORECASE,
+    "MULTILINE": re.MULTILINE,
+    "DOTALL": re.DOTALL,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,9 +187,15 @@ def parse_args() -> argparse.Namespace:
         help="Custom chapter mapping file: one line `Title|start-end` (1-indexed, inclusive)",
     )
     parser.add_argument(
+        "--patterns-file",
+        type=pathlib.Path,
+        default=DEFAULT_PATTERNS_FILE,
+        help=f"YAML cleaning patterns (default: {DEFAULT_PATTERNS_FILE.name})",
+    )
+    parser.add_argument(
         "--no-strip-page-artifacts",
         action="store_true",
-        help="Disable removal of likely page numbers/headers/footers",
+        help="Disable page cleaning and TOC page skip from patterns file",
     )
     parser.add_argument(
         "--ai-spoken-as",
@@ -220,34 +234,120 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def strip_page_artifacts(text: str) -> str:
+@dataclass
+class SkipTocConfig:
+    enabled: bool = True
+    min_lines: int = 5
+    keywords: list[str] = field(default_factory=list)
+    keyword_line_ratio: float = 0.12
+    leader_pattern: str = r"\.{2,}\s*\d{1,4}\s*$"
+    leader_line_ratio: float = 0.35
+
+
+@dataclass
+class CleaningPatterns:
+    line_drop: list[re.Pattern[str]] = field(default_factory=list)
+    inline_sub: list[tuple[re.Pattern[str], str]] = field(default_factory=list)
+    skip_toc: SkipTocConfig = field(default_factory=SkipTocConfig)
+
+
+def _compile_regex_flags(flags: Any) -> int:
+    value = 0
+    for name in flags or []:
+        key = str(name).upper()
+        if key not in _REGEX_FLAGS:
+            raise RuntimeError(f"Unknown regex flag in patterns file: {name}")
+        value |= _REGEX_FLAGS[key]
+    return value
+
+
+def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns:
+    patterns_path = path or DEFAULT_PATTERNS_FILE
+    if not patterns_path.exists():
+        raise RuntimeError(f"Cleaning patterns file not found: {patterns_path}")
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError(
+            "PyYAML is required for cleaning patterns. Install with: pip install -e ."
+        ) from exc
+
+    raw = yaml.safe_load(patterns_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Patterns file must be a mapping: {patterns_path}")
+
+    line_drop: list[re.Pattern[str]] = []
+    for item in raw.get("line_drop") or []:
+        if not isinstance(item, dict) or not item.get("pattern"):
+            raise RuntimeError(f"Invalid line_drop entry in {patterns_path}")
+        line_drop.append(re.compile(str(item["pattern"]), _compile_regex_flags(item.get("flags"))))
+
+    inline_sub: list[tuple[re.Pattern[str], str]] = []
+    for item in raw.get("inline_sub") or []:
+        if not isinstance(item, dict) or not item.get("pattern"):
+            raise RuntimeError(f"Invalid inline_sub entry in {patterns_path}")
+        inline_sub.append(
+            (
+                re.compile(str(item["pattern"]), _compile_regex_flags(item.get("flags"))),
+                str(item.get("repl", "")),
+            )
+        )
+
+    toc_raw = raw.get("skip_toc") or {}
+    if toc_raw and not isinstance(toc_raw, dict):
+        raise RuntimeError(f"Invalid skip_toc section in {patterns_path}")
+    skip_toc = SkipTocConfig(
+        enabled=bool(toc_raw.get("enabled", True)),
+        min_lines=int(toc_raw.get("min_lines", 5)),
+        keywords=[str(k) for k in (toc_raw.get("keywords") or [])],
+        keyword_line_ratio=float(toc_raw.get("keyword_line_ratio", 0.12)),
+        leader_pattern=str(toc_raw.get("leader_pattern", r"\.{2,}\s*\d{1,4}\s*$")),
+        leader_line_ratio=float(toc_raw.get("leader_line_ratio", 0.35)),
+    )
+    return CleaningPatterns(line_drop=line_drop, inline_sub=inline_sub, skip_toc=skip_toc)
+
+
+def is_toc_page(text: str, patterns: CleaningPatterns) -> bool:
+    cfg = patterns.skip_toc
+    if not cfg.enabled:
+        return False
+    lines = [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
+    if len(lines) < cfg.min_lines:
+        return False
+
+    keywords = [k.casefold() for k in cfg.keywords if k.strip()]
+    keyword_hits = 0
+    if keywords:
+        keyword_hits = sum(
+            1 for line in lines if any(keyword in line.casefold() for keyword in keywords)
+        )
+    leader_re = re.compile(cfg.leader_pattern)
+    leader_hits = sum(1 for line in lines if leader_re.search(line))
+    keyword_ratio = keyword_hits / float(len(lines))
+    leader_ratio = leader_hits / float(len(lines))
+
+    if leader_ratio >= cfg.leader_line_ratio:
+        return True
+    if keyword_ratio >= cfg.keyword_line_ratio:
+        return True
+    # Keyword header + moderate leaders (typical TOC)
+    return keyword_hits >= 1 and leader_ratio >= max(cfg.leader_line_ratio * 0.45, 0.15)
+
+
+def strip_page_artifacts(text: str, patterns: CleaningPatterns | None = None) -> str:
+    cfg = patterns or load_cleaning_patterns()
     lines = [line.strip() for line in text.replace("\r", "\n").split("\n")]
     nonempty = [line for line in lines if line]
     if not nonempty:
         return ""
 
-    page_number_only = re.compile(r"^\d{1,4}$")
-    footer_with_dot = re.compile(
-        r"^(?:AI-Disrupt\s+)?PDLC\s*[·•]\s.{1,140}(?:\s+\d{1,4})?$",
-        re.IGNORECASE,
-    )
-    footer_with_pipe = re.compile(r"^.{3,80}\s[|]\s.{1,80}(?:\s+\d{1,4})?$")
-
     def looks_like_artifact(line: str) -> bool:
-        if (
-            page_number_only.match(line)
-            or footer_with_dot.match(line)
-            or footer_with_pipe.match(line)
-        ):
-            return True
-        return bool(re.match(r"^(?:AI-Disrupt\s+)?PDLC\s*[·•]", line, re.IGNORECASE))
+        return any(pattern.search(line) for pattern in cfg.line_drop)
 
-    # Drop footer/header lines wherever they appear (PDF extract order varies).
     filtered = [line for line in nonempty if not looks_like_artifact(line)]
     if filtered:
         nonempty = filtered
 
-    # Edge cleanup for artifacts not caught above.
     while nonempty and looks_like_artifact(nonempty[0]):
         nonempty.pop(0)
     while nonempty and looks_like_artifact(nonempty[-1]):
@@ -256,27 +356,10 @@ def strip_page_artifacts(text: str) -> str:
     return "\n".join(nonempty)
 
 
-def strip_inline_page_artifacts(text: str) -> str:
-    # Footers often get glued to the last sentence on the same line.
-    text = re.sub(
-        r"\s*AI-Disrupt PDLC\s*[·•]\s*Целевое видение\s*(?:\d{1,4})?\s*",
-        " ",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\s[\w\-]{2,40}\s+PDLC\s*[·•]\s*[^\d.]{3,80}\s*(?:\d{1,4})?\s*",
-        " ",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\s[·•]\s[^\d.]{3,80}\s+\d{1,4}\s*$",
-        "",
-        text,
-    )
-    # Trailing orphan page number at end of page text.
-    text = re.sub(r"\s+\d{1,4}\s*$", "", text)
+def strip_inline_page_artifacts(text: str, patterns: CleaningPatterns | None = None) -> str:
+    cfg = patterns or load_cleaning_patterns()
+    for pattern, repl in cfg.inline_sub:
+        text = pattern.sub(repl, text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -434,20 +517,32 @@ def extract_pages_text(
     ai_spoken_as: str,
     ii_spoken_as: str,
     stylize_quotes: bool = True,
+    patterns: CleaningPatterns | None = None,
 ) -> list[str]:
+    cleaning = patterns
+    if strip_artifacts and cleaning is None:
+        cleaning = load_cleaning_patterns()
+
     pages_text: list[str] = []
+    skipped_toc = 0
     for page_idx in range(start_idx, end_idx):
         text = reader.pages[page_idx].extract_text() or ""
-        if strip_artifacts:
-            text = strip_page_artifacts(text)
+        if strip_artifacts and cleaning is not None:
+            if is_toc_page(text, cleaning):
+                pages_text.append("")
+                skipped_toc += 1
+                continue
+            text = strip_page_artifacts(text, cleaning)
         text = apply_pronunciation_fixes(text, ai_spoken_as=ai_spoken_as, ii_spoken_as=ii_spoken_as)
         text = expand_section_references(text)
         normalized = normalize_text(text)
-        if strip_artifacts:
-            normalized = strip_inline_page_artifacts(normalized)
+        if strip_artifacts and cleaning is not None:
+            normalized = strip_inline_page_artifacts(normalized, cleaning)
         if stylize_quotes:
             normalized = stylize_quoted_speech(normalized)
         pages_text.append(normalized)
+    if skipped_toc:
+        print(f"Skipped {skipped_toc} TOC-like page(s) via cleaning patterns", flush=True)
     return pages_text
 
 
@@ -1427,6 +1522,14 @@ def main() -> int:
         print("`--silero-sentence-gap` must be >= 0.", file=sys.stderr)
         return 1
 
+    cleaning_patterns: CleaningPatterns | None = None
+    if not args.no_strip_page_artifacts:
+        try:
+            cleaning_patterns = load_cleaning_patterns(args.patterns_file)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
     if args.clean_out_dir:
         removed = clean_output_dir(args.out_dir)
@@ -1444,6 +1547,7 @@ def main() -> int:
         ai_spoken_as=args.ai_spoken_as,
         ii_spoken_as=args.ii_spoken_as,
         stylize_quotes=(args.engine == "say"),
+        patterns=cleaning_patterns,
     )
 
     audio_files: list[pathlib.Path] = []
