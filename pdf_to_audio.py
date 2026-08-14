@@ -141,8 +141,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--f5-nfe-step",
         type=int,
-        default=32,
-        help="F5 ODE steps (default: 32; lower=faster)",
+        default=16,
+        help="F5 ODE steps (default: 16; lower=faster, 32=quality)",
     )
     parser.add_argument(
         "--f5-speed",
@@ -1300,7 +1300,7 @@ def synthesize_chunk(
     f5_ref_audio: pathlib.Path | None = None,
     f5_ref_text: str = "",
     f5_device: str = "",
-    f5_nfe_step: int = 32,
+    f5_nfe_step: int = 16,
     f5_speed: float = 1.0,
 ) -> None:
     if engine == "piper":
@@ -1394,7 +1394,7 @@ def run_jobs(
     f5_ref_audio: pathlib.Path | None = None,
     f5_ref_text: str = "",
     f5_device: str = "",
-    f5_nfe_step: int = 32,
+    f5_nfe_step: int = 16,
     f5_speed: float = 1.0,
 ) -> list[pathlib.Path]:
     common = dict(

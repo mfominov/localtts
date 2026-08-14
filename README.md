@@ -87,7 +87,18 @@ FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt \
 ```
 
 Если `F5_REF_TEXT` пустой, берётся соседний `.txt` или ASR транскрипт референса.
-Ускорение: `F5_NFE_STEP=16`. На macOS по умолчанию — **MPS** (быстрее CPU).
+
+F5 — редкий **premium**-проход; для повседневной озвучки удобнее Silero.
+На macOS по умолчанию — **MPS**, `F5_NFE_STEP=16` (быстрее; было 32).
+Пресеты качества/скорости:
+
+```bash
+FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt F5_PRESET=fast      # nfe=16 (default)
+FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt F5_PRESET=balanced  # nfe=24
+FORCE=1 make listen-f5tts PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt F5_PRESET=quality   # nfe=32
+# или явно: F5_NFE_STEP=20
+```
+
 Внутри F5 режет текст на чанки через `ThreadPoolExecutor`; на Metal это давало SIGSEGV,
 поэтому при `mps` пул принудительно `max_workers=1`. Откат: `F5_DEVICE=cpu`.
 `JOBS` лучше оставить `1` для F5.
