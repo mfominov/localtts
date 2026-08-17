@@ -243,6 +243,7 @@ class CleaningPatterns:
     line_drop: list[re.Pattern[str]] = field(default_factory=list)
     inline_sub: list[tuple[re.Pattern[str], str]] = field(default_factory=list)
     skip_toc: SkipTocConfig = field(default_factory=SkipTocConfig)
+    pronounce: dict[str, str] = field(default_factory=dict)
 
 
 def _compile_regex_flags(flags: Any) -> int:
@@ -300,7 +301,18 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         page_only_pattern=str(toc_raw.get("page_only_pattern", r"^(?:стр\.?\s*)?\d{1,4}\s*$")),
         page_only_line_ratio=float(toc_raw.get("page_only_line_ratio", 0.35)),
     )
-    return CleaningPatterns(line_drop=line_drop, inline_sub=inline_sub, skip_toc=skip_toc)
+
+    pronounce_raw = raw.get("pronounce") or {}
+    if pronounce_raw and not isinstance(pronounce_raw, dict):
+        raise RuntimeError(f"Invalid pronounce section in {patterns_path}")
+    pronounce = {str(key): str(value) for key, value in pronounce_raw.items() if str(key).strip()}
+
+    return CleaningPatterns(
+        line_drop=line_drop,
+        inline_sub=inline_sub,
+        skip_toc=skip_toc,
+        pronounce=pronounce,
+    )
 
 
 def is_toc_page(text: str, patterns: CleaningPatterns) -> bool:
@@ -407,6 +419,114 @@ SPOKEN_SECTION_REF = re.compile(
     r"в разделе\s+(\d+(?:\s+точка\s+\d+)+)",
     flags=re.IGNORECASE,
 )
+
+_SPOKEN_SECTION_DIGITS = re.compile(
+    r"(в разделе\s+)(\d+(?:\s+точка\s+\d+)+)",
+    flags=re.IGNORECASE,
+)
+
+_RU_ONES = (
+    "ноль",
+    "один",
+    "два",
+    "три",
+    "четыре",
+    "пять",
+    "шесть",
+    "семь",
+    "восемь",
+    "девять",
+)
+_RU_TEENS = (
+    "десять",
+    "одиннадцать",
+    "двенадцать",
+    "тринадцать",
+    "четырнадцать",
+    "пятнадцать",
+    "шестнадцать",
+    "семнадцать",
+    "восемнадцать",
+    "девятнадцать",
+)
+_RU_TENS = (
+    "",
+    "",
+    "двадцать",
+    "тридцать",
+    "сорок",
+    "пятьдесят",
+    "шестьдесят",
+    "семьдесят",
+    "восемьдесят",
+    "девяносто",
+)
+_RU_HUNDREDS = (
+    "",
+    "сто",
+    "двести",
+    "триста",
+    "четыреста",
+    "пятьсот",
+    "шестьсот",
+    "семьсот",
+    "восемьсот",
+    "девятьсот",
+)
+
+
+def int_to_ru_words(value: int) -> str:
+    """Convert 0..999 to Russian words (for section numbers in TTS)."""
+    if value < 0 or value > 999:
+        return str(value)
+    if value < 10:
+        return _RU_ONES[value]
+    if value < 20:
+        return _RU_TEENS[value - 10]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        if ones == 0:
+            return _RU_TENS[tens]
+        return f"{_RU_TENS[tens]} {_RU_ONES[ones]}"
+    hundreds, rem = divmod(value, 100)
+    if rem == 0:
+        return _RU_HUNDREDS[hundreds]
+    return f"{_RU_HUNDREDS[hundreds]} {int_to_ru_words(rem)}"
+
+
+def expand_section_ref_digits_to_words(text: str) -> str:
+    """Turn `в разделе 3 точка 2` into `в разделе три точка два` for TTS."""
+
+    def repl(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        parts = re.split(r"\s+точка\s+", match.group(2), flags=re.IGNORECASE)
+        words = [int_to_ru_words(int(part)) for part in parts]
+        return prefix + " точка ".join(words)
+
+    return _SPOKEN_SECTION_DIGITS.sub(repl, text)
+
+
+def apply_pronounce_map(text: str, pronounce: dict[str, str] | None) -> str:
+    """Replace whole tokens from patterns `pronounce:` map (longest first)."""
+    if not pronounce:
+        return text
+    result = text
+    for token, spoken in sorted(pronounce.items(), key=lambda item: len(item[0]), reverse=True):
+        if not token.strip() or not spoken.strip():
+            continue
+        pattern = re.compile(
+            rf"(?<![A-Za-zА-Яа-яЁё0-9]){re.escape(token)}(?![A-Za-zА-Яа-яЁё0-9])",
+            flags=re.IGNORECASE,
+        )
+        result = pattern.sub(spoken, result)
+    return result
+
+
+def prepare_tts_spoken_text(text: str, pronounce: dict[str, str] | None = None) -> str:
+    """TTS-only transforms; do not use for UI/cues storage."""
+    spoken = expand_section_ref_digits_to_words(text)
+    spoken = apply_pronounce_map(spoken, pronounce)
+    return spoken
 
 
 def section_refs_for_display(text: str) -> str:
@@ -1362,9 +1482,16 @@ def resolve_piper_binary() -> str:
     )
 
 
-def synthesize_with_say(voice: str, text: str, output_file: pathlib.Path) -> None:
+def synthesize_with_say(
+    voice: str,
+    text: str,
+    output_file: pathlib.Path,
+    *,
+    pronounce: dict[str, str] | None = None,
+) -> None:
+    spoken = prepare_tts_spoken_text(text, pronounce)
     text_file = output_file.with_suffix(".txt")
-    text_file.write_text(text, encoding="utf-8")
+    text_file.write_text(spoken, encoding="utf-8")
     try:
         subprocess.run(
             ["say", "-v", voice, "-f", str(text_file), "-o", str(output_file)],
@@ -1374,14 +1501,20 @@ def synthesize_with_say(voice: str, text: str, output_file: pathlib.Path) -> Non
         text_file.unlink(missing_ok=True)
 
 
-def synthesize_with_piper(model: pathlib.Path, text: str, output_file: pathlib.Path) -> None:
+def synthesize_with_piper(
+    model: pathlib.Path,
+    text: str,
+    output_file: pathlib.Path,
+    *,
+    pronounce: dict[str, str] | None = None,
+) -> None:
     if not model.exists():
         raise RuntimeError(f"Piper model not found: {model}. Run: make install-piper")
     config = pathlib.Path(str(model) + ".json")
     if not config.exists():
         raise RuntimeError(f"Piper model config not found: {config}")
 
-    spoken = strip_speech_markup(text)
+    spoken = prepare_tts_spoken_text(strip_speech_markup(text), pronounce)
     wav_file = output_file.with_suffix(".wav")
     piper_bin = resolve_piper_binary()
     process = subprocess.run(
@@ -1466,6 +1599,8 @@ def synthesize_with_silero(
     text: str,
     output_file: pathlib.Path,
     sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
+    *,
+    pronounce: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -1499,8 +1634,9 @@ def synthesize_with_silero(
                         flush=True,
                     )
                     continue
+                tts_part = prepare_tts_spoken_text(part, pronounce)
                 try:
-                    audio = model.apply_tts(text=part, speaker=speaker, sample_rate=sample_rate)
+                    audio = model.apply_tts(text=tts_part, speaker=speaker, sample_rate=sample_rate)
                 except ValueError:
                     skipped += 1
                     print(
@@ -1570,11 +1706,12 @@ def synthesize_chunk(
     silero_speaker: str = "xenia",
     silero_sample_rate: int = 24000,
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
+    pronounce: dict[str, str] | None = None,
 ) -> None:
     if engine == "piper":
         if piper_model is None:
             raise RuntimeError("Piper model path is required for engine=piper")
-        synthesize_with_piper(piper_model, text, output_file)
+        synthesize_with_piper(piper_model, text, output_file, pronounce=pronounce)
         return
     if engine == "silero":
         synthesize_with_silero(
@@ -1584,9 +1721,10 @@ def synthesize_chunk(
             text,
             output_file,
             sentence_gap=silero_sentence_gap,
+            pronounce=pronounce,
         )
         return
-    synthesize_with_say(voice, text, output_file)
+    synthesize_with_say(voice, text, output_file, pronounce=pronounce)
 
 
 def format_duration(seconds: float) -> str:
@@ -1624,6 +1762,7 @@ def synthesize_job(
     silero_speaker: str,
     silero_sample_rate: int,
     silero_sentence_gap: float,
+    pronounce: dict[str, str] | None = None,
 ) -> tuple[int, pathlib.Path, float]:
     idx, output_file, text = job
     started = time.perf_counter()
@@ -1637,6 +1776,7 @@ def synthesize_job(
         silero_speaker=silero_speaker,
         silero_sample_rate=silero_sample_rate,
         silero_sentence_gap=silero_sentence_gap,
+        pronounce=pronounce,
     )
     return idx, output_file, time.perf_counter() - started
 
@@ -1652,6 +1792,7 @@ def run_jobs(
     silero_sample_rate: int = 24000,
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     started_at: float | None = None,
+    pronounce: dict[str, str] | None = None,
 ) -> list[pathlib.Path]:
     if started_at is None:
         started_at = time.perf_counter()
@@ -1663,6 +1804,7 @@ def run_jobs(
         silero_speaker=silero_speaker,
         silero_sample_rate=silero_sample_rate,
         silero_sentence_gap=silero_sentence_gap,
+        pronounce=pronounce,
     )
     if workers <= 1:
         result: list[pathlib.Path] = []
@@ -1697,6 +1839,7 @@ def run_jobs(
                 silero_speaker,
                 silero_sample_rate,
                 silero_sentence_gap,
+                pronounce,
             )
             for job in jobs
         ]
@@ -2245,6 +2388,13 @@ def main() -> int:
             print(str(exc), file=sys.stderr)
             return 1
 
+    pronounce_map: dict[str, str] = {}
+    try:
+        pronounce_source = cleaning_patterns or load_cleaning_patterns(args.patterns_file)
+        pronounce_map = dict(pronounce_source.pronounce)
+    except RuntimeError:
+        pronounce_map = {}
+
     reader = get_pdf_reader(args.pdf)
     total_pages = len(reader.pages)
     start_idx, end_idx = resolve_page_range(total_pages, args.start_page, args.end_page)
@@ -2325,6 +2475,7 @@ def main() -> int:
         silero_speaker=args.silero_speaker,
         silero_sample_rate=args.silero_sample_rate,
         silero_sentence_gap=args.silero_sentence_gap,
+        pronounce=pronounce_map,
     )
 
     if args.mode == "chapters":

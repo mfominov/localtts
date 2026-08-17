@@ -6,8 +6,12 @@ line_drop:
   - pattern: '^\d{1,4}$'
   - pattern: '^(?:AI-Disrupt\s+)?PDLC\s*[·•]\s.{1,140}(?:\s+\d{1,4})?$'
     flags: [IGNORECASE]
+  - pattern: '^(?:AI-DISRUPT\s+)?PSLC\s*[·•]\s.{1,140}(?:\s+\d{1,4})?$'
+    flags: [IGNORECASE]
   - pattern: '^.{3,80}\s[|]\s.{1,80}(?:\s+\d{1,4})?$'
   - pattern: '^(?:AI-Disrupt\s+)?PDLC\s*[·•]'
+    flags: [IGNORECASE]
+  - pattern: '^(?:AI-DISRUPT\s+)?PSLC\s*[·•]'
     flags: [IGNORECASE]
 
 inline_sub:
@@ -15,13 +19,81 @@ inline_sub:
   - pattern: '\s*AI-Disrupt PDLC\s*[·•]\s*Целевое видение\s*(?:\d{1,4})?\s*'
     repl: ' '
     flags: [IGNORECASE]
+  - pattern: '\s*AI-DISRUPT\s+PSLC\s*[·•]\s*Концепция\s*(?:\d{1,4})?\s*'
+    repl: ' '
+    flags: [IGNORECASE]
   - pattern: '\s[\w\-]{2,40}\s+PDLC\s*[·•]\s*[^\d.]{3,80}\s*(?:\d{1,4})?\s*'
+    repl: ' '
+    flags: [IGNORECASE]
+  - pattern: '\s[\w\-]*DISRUPT\s+PSLC\s*[·•]\s*[^\d.]{3,80}\s*(?:\d{1,4})?\s*'
     repl: ' '
     flags: [IGNORECASE]
   - pattern: '\s[·•]\s[^\d.]{3,80}\s+\d{1,4}\s*$'
     repl: ''
   - pattern: '\s+\d{1,4}\s*$'
     repl: ''
+
+# Whole-token replacements applied only before TTS (UI/cues keep original spelling).
+pronounce:
+  AI-DISRUPT: "эй ай дисрапт"
+  DISRUPT: "дисрапт"
+  PSLC: "пи эс эл си"
+  PDLC: "пи ди эл си"
+  ROI: "эр оу ай"
+  CIO: "си ай оу"
+  IOP: "ай оу пи"
+  IDP: "ай ди пи"
+  SLA: "эс эл эй"
+  SLO: "эс эл оу"
+  MVP: "эм ви пи"
+  KPI: "кей пи ай"
+  API: "эй пи ай"
+  LLM: "эл эл эм"
+  GenAI: "джен ай"
+  GENAI: "джен ай"
+  ITSM: "ай ти эс эм"
+  I&O: "ай энд оу"
+  RACI: "рэйси"
+  TCO: "ти си оу"
+  BPO: "би пи оу"
+  PDF: "пи ди эф"
+  YAML: "ямл"
+  JSON: "джейсон"
+  HTTP: "эйч ти ти пи"
+  HTTPS: "эйч ти ти пи эс"
+  SQL: "эс кью эл"
+  CPU: "си пи ю"
+  GPU: "джи пи ю"
+  SRE: "эс ар и"
+  DevOps: "девопс"
+  DEVOPS: "девопс"
+  MLOps: "эм эл опс"
+  MLOPS: "эм эл опс"
+  UX: "ю икс"
+  UI: "ю ай"
+  OKR: "оу кей ар"
+  HR: "эйч ар"
+  RF: "эр эф"
+  РФ: "эр эф"
+  ЦБ: "цэ бэ"
+  ПДН: "пэ дэ эн"
+  ФЗ: "эф зэ"
+  Gartner: "гартнер"
+  GARTNER: "гартнер"
+  Knowledge: "нолидж"
+  Mesh: "меш"
+  Tiny: "тайни"
+  Teams: "тимз"
+  Platform: "платформ"
+  Control: "контрол"
+  Plane: "плейн"
+  Scorecard: "скоркад"
+  runtime: "рантайм"
+  Runtime: "рантайм"
+  agent: "эйджент"
+  Agent: "эйджент"
+  agents: "эйдженты"
+  Agents: "эйдженты"
 
 skip_toc:
   enabled: true
