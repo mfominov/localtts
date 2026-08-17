@@ -10,6 +10,7 @@
 - Format: plain lines (new lines for encode updates, not `\r`)
 - Phases: start summary (`N chapters ~duration`) + `cover` + `prepare` + encode updates + `Done in`
 - Encode: parse `ffmpeg -progress pipe:1`; emit about every 2s or +5%
+- Time source: `out_time_us` (µs) or `out_time` (HH:MM:SS); **never** `out_time_ms` (misnamed µs)
 - Stdlib only; reuse `format_duration`
 - Unit tests for progress parse / format (no real encode)
 

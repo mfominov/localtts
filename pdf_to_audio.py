@@ -1860,17 +1860,19 @@ def parse_ffmpeg_progress_fields(block: str) -> dict[str, str]:
 
 
 def ffmpeg_out_time_seconds(fields: dict[str, str]) -> float | None:
-    """Best-effort output time in seconds from a progress field dict."""
-    if "out_time_ms" in fields:
-        try:
-            return max(0.0, int(fields["out_time_ms"]) / 1000.0)
-        except ValueError:
-            pass
+    """Best-effort output time in seconds from a progress field dict.
+
+    Prefer ``out_time_us`` (microseconds). Do **not** use ``out_time_ms``:
+    despite the name, ffmpeg reports the same microsecond PTS there.
+    Fall back to human-readable ``out_time`` (HH:MM:SS.fractions).
+    """
     if "out_time_us" in fields:
-        try:
-            return max(0.0, int(fields["out_time_us"]) / 1_000_000.0)
-        except ValueError:
-            pass
+        raw_us = fields["out_time_us"]
+        if raw_us and raw_us != "N/A":
+            try:
+                return max(0.0, int(raw_us) / 1_000_000.0)
+            except ValueError:
+                pass
     raw = fields.get("out_time")
     if not raw or raw == "N/A":
         return None

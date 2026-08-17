@@ -46,10 +46,12 @@ class AudiobookExportHelpersTests(unittest.TestCase):
         self.assertIn(r"'\''", line)
 
     def test_parse_ffmpeg_progress_and_out_time(self) -> None:
+        # Realistic ffmpeg -progress block: out_time_ms is microseconds (misnomer).
         fields = ltts.parse_ffmpeg_progress_fields(
             "\n".join(
                 [
-                    "out_time_ms=125000",
+                    "out_time_ms=125000000",
+                    "out_time_us=125000000",
                     "out_time=00:02:05.000000",
                     "progress=continue",
                 ]
@@ -57,6 +59,17 @@ class AudiobookExportHelpersTests(unittest.TestCase):
         )
         self.assertEqual(fields["progress"], "continue")
         self.assertEqual(ltts.ffmpeg_out_time_seconds(fields), 125.0)
+
+        # Prefer out_time_us over a wrong out_time_ms interpretation.
+        us_only = ltts.parse_ffmpeg_progress_fields(
+            "out_time_ms=125000000\nout_time_us=125000000\nprogress=continue"
+        )
+        self.assertEqual(ltts.ffmpeg_out_time_seconds(us_only), 125.0)
+
+        # Ignore misnamed out_time_ms when us/out_time absent (would be 1000x off).
+        ms_only = ltts.parse_ffmpeg_progress_fields("out_time_ms=125000000\nprogress=continue")
+        self.assertIsNone(ltts.ffmpeg_out_time_seconds(ms_only))
+
         fields2 = ltts.parse_ffmpeg_progress_fields("out_time=01:02:03.5\nprogress=end")
         self.assertAlmostEqual(ltts.ffmpeg_out_time_seconds(fields2) or 0, 3723.5)
 
