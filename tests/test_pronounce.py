@@ -45,6 +45,29 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("эр оу ай", spoken.casefold())
         self.assertIn("си ай оу", spoken.casefold())
 
+    def test_pronounce_runtime_otel_rag_governance(self) -> None:
+        text = (
+            "Уровни runtime R0-R5 и отдельно R3. "
+            "OpenTelemetry и Board KPI scorecard. "
+            "поисковый слой (RAG). "
+            "Governance Mesh и Policy-As-Code guardrails."
+        )
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("рантайм", low)
+        self.assertIn("эр ноль — эр пять", low)
+        self.assertNotIn("r0-r5", low)
+        self.assertIn("эр три", low)
+        self.assertIn("опен телеметри", low)
+        self.assertIn("борд", low)
+        self.assertIn("кей пи ай", low)
+        self.assertIn("скоркад", low)
+        self.assertIn("раг", low)
+        self.assertIn("гавернанс", low)
+        self.assertIn("меш", low)
+        self.assertIn("полиси эс код", low)
+        self.assertIn("гардрейлс", low)
+
     def test_pslc_footer_inline_stripped(self) -> None:
         raw = (
             "Потолки отчитываются от единственного канона; любое "

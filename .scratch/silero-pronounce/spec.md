@@ -11,7 +11,7 @@ Readable speech for section refs and Latin brands without breaking player `§` d
 - Pre-synth only: digits → Russian words; `pronounce:` token map from patterns YAML
 - UI/cues/txt: still show `§N.M` via `section_refs_for_display`; AI/ИИ restored for display
 - Engines: say / piper / silero all get pre-synth
-- Dictionary: ~40 IT tokens in `patterns/default.yml` (`pronounce:`)
+- Dictionary: IT tokens in `patterns/default.yml` (`pronounce:`), incl. R0–R5 / R0-R5, OpenTelemetry, Board, RAG, Governance, Policy-as-Code, guardrails
 
 ## Out of scope
 
