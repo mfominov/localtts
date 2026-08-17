@@ -45,6 +45,65 @@ class AudiobookExportHelpersTests(unittest.TestCase):
         self.assertTrue(line.startswith("file '"))
         self.assertIn(r"'\''", line)
 
+    def test_parse_ffmpeg_progress_and_out_time(self) -> None:
+        fields = ltts.parse_ffmpeg_progress_fields(
+            "\n".join(
+                [
+                    "out_time_ms=125000",
+                    "out_time=00:02:05.000000",
+                    "progress=continue",
+                ]
+            )
+        )
+        self.assertEqual(fields["progress"], "continue")
+        self.assertEqual(ltts.ffmpeg_out_time_seconds(fields), 125.0)
+        fields2 = ltts.parse_ffmpeg_progress_fields("out_time=01:02:03.5\nprogress=end")
+        self.assertAlmostEqual(ltts.ffmpeg_out_time_seconds(fields2) or 0, 3723.5)
+
+    def test_format_export_progress_lines(self) -> None:
+        self.assertEqual(
+            ltts.format_export_phase_line("cover", 1.2, 3.0),
+            "cover  +1s  elapsed 3s",
+        )
+        self.assertEqual(
+            ltts.format_export_encode_line(12.4, 200.0, 45.0),
+            "encode 12%  out 3m20s  elapsed 45s",
+        )
+
+    def test_should_emit_encode_progress_throttle(self) -> None:
+        self.assertTrue(
+            ltts.should_emit_encode_progress(
+                last_percent=None,
+                last_emit_at=None,
+                percent=0.0,
+                now=0.0,
+            )
+        )
+        self.assertFalse(
+            ltts.should_emit_encode_progress(
+                last_percent=10.0,
+                last_emit_at=100.0,
+                percent=12.0,
+                now=101.0,
+            )
+        )
+        self.assertTrue(
+            ltts.should_emit_encode_progress(
+                last_percent=10.0,
+                last_emit_at=100.0,
+                percent=15.0,
+                now=101.0,
+            )
+        )
+        self.assertTrue(
+            ltts.should_emit_encode_progress(
+                last_percent=10.0,
+                last_emit_at=100.0,
+                percent=11.0,
+                now=102.0,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

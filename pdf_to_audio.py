@@ -1456,6 +1456,160 @@ def prepare_audiobook_cover(
     return render_pdf_cover(pdf, cover_page, dest)
 
 
+def parse_ffmpeg_progress_fields(block: str) -> dict[str, str]:
+    """Parse a ffmpeg `-progress` key=value block into a dict."""
+    fields: dict[str, str] = {}
+    for line in block.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+def ffmpeg_out_time_seconds(fields: dict[str, str]) -> float | None:
+    """Best-effort output time in seconds from a progress field dict."""
+    if "out_time_ms" in fields:
+        try:
+            return max(0.0, int(fields["out_time_ms"]) / 1000.0)
+        except ValueError:
+            pass
+    if "out_time_us" in fields:
+        try:
+            return max(0.0, int(fields["out_time_us"]) / 1_000_000.0)
+        except ValueError:
+            pass
+    raw = fields.get("out_time")
+    if not raw or raw == "N/A":
+        return None
+    # HH:MM:SS.microseconds
+    try:
+        parts = raw.split(":")
+        if len(parts) != 3:
+            return None
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+        return max(0.0, hours * 3600 + minutes * 60 + seconds)
+    except ValueError:
+        return None
+
+
+def format_export_phase_line(phase: str, phase_seconds: float, elapsed_seconds: float) -> str:
+    return f"{phase}  +{format_duration(phase_seconds)}  elapsed {format_duration(elapsed_seconds)}"
+
+
+def format_export_encode_line(
+    percent: float,
+    out_seconds: float,
+    elapsed_seconds: float,
+) -> str:
+    pct = max(0, min(100, int(round(percent))))
+    return (
+        f"encode {pct}%  out {format_duration(out_seconds)}  "
+        f"elapsed {format_duration(elapsed_seconds)}"
+    )
+
+
+def should_emit_encode_progress(
+    *,
+    last_percent: float | None,
+    last_emit_at: float | None,
+    percent: float,
+    now: float,
+    min_interval_sec: float = 2.0,
+    min_percent_step: float = 5.0,
+) -> bool:
+    if last_percent is None or last_emit_at is None:
+        return True
+    if percent - last_percent >= min_percent_step:
+        return True
+    return now - last_emit_at >= min_interval_sec
+
+
+def run_ffmpeg_encode_with_progress(
+    cmd: list[str],
+    *,
+    total_audio_seconds: float,
+    started_at: float,
+) -> None:
+    """Run ffmpeg with `-progress pipe:1`, printing throttled encode lines."""
+    progress_cmd = [
+        *cmd[:-1],
+        "-nostats",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        cmd[-1],
+    ]
+    proc = subprocess.Popen(
+        progress_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+
+    block_lines: list[str] = []
+    last_percent: float | None = None
+    last_emit_at: float | None = None
+    last_out_seconds = 0.0
+
+    def emit(percent: float, out_seconds: float, *, force: bool = False) -> None:
+        nonlocal last_percent, last_emit_at, last_out_seconds
+        now = time.perf_counter()
+        if not force and not should_emit_encode_progress(
+            last_percent=last_percent,
+            last_emit_at=last_emit_at,
+            percent=percent,
+            now=now,
+        ):
+            return
+        print(
+            format_export_encode_line(percent, out_seconds, now - started_at),
+            flush=True,
+        )
+        last_percent = percent
+        last_emit_at = now
+        last_out_seconds = out_seconds
+
+    while True:
+        line = proc.stdout.readline()
+        if line == "" and proc.poll() is not None:
+            break
+        if line == "":
+            continue
+        block_lines.append(line.rstrip("\n"))
+        if not line.startswith("progress="):
+            continue
+        fields = parse_ffmpeg_progress_fields("\n".join(block_lines))
+        block_lines.clear()
+        out_seconds = ffmpeg_out_time_seconds(fields)
+        if out_seconds is None:
+            continue
+        if total_audio_seconds > 0:
+            percent = min(100.0, (out_seconds / total_audio_seconds) * 100.0)
+        else:
+            percent = 0.0
+        force = fields.get("progress") == "end"
+        if force:
+            percent = 100.0
+        emit(percent, out_seconds, force=force)
+
+    stderr_text = proc.stderr.read()
+    code = proc.wait()
+    if code != 0:
+        detail = (stderr_text or "").strip()
+        raise RuntimeError(
+            "ffmpeg failed to build audiobook.m4b" + (f":\n{detail}" if detail else "")
+        )
+    if last_percent is None or last_percent < 100:
+        emit(100.0, max(last_out_seconds, total_audio_seconds), force=True)
+
+
 def export_audiobook(
     out_dir: pathlib.Path,
     *,
@@ -1466,6 +1620,7 @@ def export_audiobook(
     book_author: str = "",
     bitrate: str = "96k",
 ) -> pathlib.Path:
+    started_at = time.perf_counter()
     ffmpeg = require_ffmpeg()
     manifest_path = out_dir / "manifest.json"
     if not manifest_path.exists():
@@ -1491,17 +1646,36 @@ def export_audiobook(
     if not audio_files:
         raise RuntimeError("No chapter audio files found for export")
 
+    total_audio_seconds = sum(duration for _, duration in chapter_meta)
+    print(
+        f"Exporting {len(audio_files)} chapters "
+        f"(~{format_duration(total_audio_seconds)} audio) → audiobook.m4b…",
+        flush=True,
+    )
+
     title = (book_title or "").strip() or default_book_title(pdf, out_dir)
     artist = (book_author or "").strip() or "LocalTTS"
+
+    cover_started = time.perf_counter()
     cover_path = prepare_audiobook_cover(
         out_dir=out_dir,
         pdf=pdf,
         cover=cover,
         cover_page=cover_page,
     )
+    print(
+        format_export_phase_line(
+            "cover",
+            time.perf_counter() - cover_started,
+            time.perf_counter() - started_at,
+        ),
+        flush=True,
+    )
+
     output_m4b = out_dir / "audiobook.m4b"
 
     with tempfile.TemporaryDirectory(prefix="localtts-m4b-") as tmp:
+        prepare_started = time.perf_counter()
         tmp_dir = pathlib.Path(tmp)
         concat_path = tmp_dir / "concat.txt"
         meta_path = tmp_dir / "ffmetadata.txt"
@@ -1512,6 +1686,14 @@ def export_audiobook(
         meta_path.write_text(
             build_ffmetadata(title=title, artist=artist, chapters=chapter_meta),
             encoding="utf-8",
+        )
+        print(
+            format_export_phase_line(
+                "prepare",
+                time.perf_counter() - prepare_started,
+                time.perf_counter() - started_at,
+            ),
+            flush=True,
         )
         cmd = [
             ffmpeg,
@@ -1544,15 +1726,18 @@ def export_audiobook(
             "+faststart",
             str(output_m4b),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(
-                "ffmpeg failed to build audiobook.m4b" + (f":\n{detail}" if detail else "")
-            )
+        run_ffmpeg_encode_with_progress(
+            cmd,
+            total_audio_seconds=total_audio_seconds,
+            started_at=started_at,
+        )
 
     if not output_m4b.exists() or output_m4b.stat().st_size == 0:
         raise RuntimeError(f"audiobook.m4b was not created in {out_dir}")
+    print(
+        f"\nDone in {format_duration(time.perf_counter() - started_at)}",
+        flush=True,
+    )
     return output_m4b
 
 
