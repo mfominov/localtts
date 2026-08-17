@@ -68,9 +68,34 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertNotIn("Концепция", cleaned)
         self.assertIn("Нормальный абзац про агентов.", cleaned)
 
-    def test_pronounce_loaded_from_yaml(self) -> None:
-        self.assertIn("PSLC", self.patterns.pronounce)
-        self.assertTrue(self.patterns.pronounce["PSLC"])
+    def test_ai_ii_spoken_from_patterns(self) -> None:
+        self.assertEqual(self.patterns.ai_spoken_as, "эй ай")
+        self.assertEqual(self.patterns.ii_spoken_as, "и и")
+        text = ltts.apply_pronunciation_fixes(
+            "AI и ИИ вместе",
+            self.patterns.ai_spoken_as,
+            self.patterns.ii_spoken_as,
+        )
+        self.assertIn("эй ай", text)
+        self.assertIn("и и", text)
+        self.assertEqual(ltts.section_refs_for_display(text), "AI и ИИ вместе")
+
+    def test_custom_ai_ii_from_yaml(self) -> None:
+        yaml_text = """
+line_drop: []
+inline_sub: []
+ai_spoken_as: "эй-ай"
+ii_spoken_as: "и-и"
+pronounce: {}
+skip_toc:
+  enabled: false
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.yml"
+            path.write_text(yaml_text, encoding="utf-8")
+            patterns = ltts.load_cleaning_patterns(path)
+            self.assertEqual(patterns.ai_spoken_as, "эй-ай")
+            self.assertEqual(patterns.ii_spoken_as, "и-и")
 
     def test_custom_pronounce_override(self) -> None:
         yaml_text = """

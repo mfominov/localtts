@@ -33,6 +33,10 @@ inline_sub:
   - pattern: '\s+\d{1,4}\s*$'
     repl: ''
 
+# Spoken forms applied at extract (UI restores AI / ИИ for display).
+ai_spoken_as: "эй ай"
+ii_spoken_as: "и и"
+
 # Whole-token replacements applied only before TTS (UI/cues keep original spelling).
 pronounce:
   AI-DISRUPT: "эй ай дисрапт"

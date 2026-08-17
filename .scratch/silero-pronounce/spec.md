@@ -7,8 +7,9 @@ Readable speech for section refs and Latin brands without breaking player `§` d
 ## Decisions (grilling)
 
 - Extract: keep `§3.2` → `в разделе 3 точка 2` (Arabic digits); strip PSLC footers in patterns
+- Extract: `ai_spoken_as` / `ii_spoken_as` from patterns YAML (CLI flags removed)
 - Pre-synth only: digits → Russian words; `pronounce:` token map from patterns YAML
-- UI/cues/txt: still show `§N.M` via `section_refs_for_display`
+- UI/cues/txt: still show `§N.M` via `section_refs_for_display`; AI/ИИ restored for display
 - Engines: say / piper / silero all get pre-synth
 - Dictionary: ~40 IT tokens in `patterns/default.yml` (`pronounce:`)
 

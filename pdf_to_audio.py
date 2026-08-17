@@ -190,16 +190,6 @@ def parse_args() -> argparse.Namespace:
         help="Disable page cleaning and TOC page skip from patterns file",
     )
     parser.add_argument(
-        "--ai-spoken-as",
-        default="эй ай",
-        help="How to pronounce `AI` (default: `эй ай`)",
-    )
-    parser.add_argument(
-        "--ii-spoken-as",
-        default="и и",
-        help="How to pronounce `ИИ` (default: `и и`)",
-    )
-    parser.add_argument(
         "--jobs",
         type=int,
         default=1,
@@ -244,6 +234,8 @@ class CleaningPatterns:
     inline_sub: list[tuple[re.Pattern[str], str]] = field(default_factory=list)
     skip_toc: SkipTocConfig = field(default_factory=SkipTocConfig)
     pronounce: dict[str, str] = field(default_factory=dict)
+    ai_spoken_as: str = "эй ай"
+    ii_spoken_as: str = "и и"
 
 
 def _compile_regex_flags(flags: Any) -> int:
@@ -307,11 +299,16 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         raise RuntimeError(f"Invalid pronounce section in {patterns_path}")
     pronounce = {str(key): str(value) for key, value in pronounce_raw.items() if str(key).strip()}
 
+    ai_spoken_as = str(raw.get("ai_spoken_as") or "эй ай").strip() or "эй ай"
+    ii_spoken_as = str(raw.get("ii_spoken_as") or "и и").strip() or "и и"
+
     return CleaningPatterns(
         line_drop=line_drop,
         inline_sub=inline_sub,
         skip_toc=skip_toc,
         pronounce=pronounce,
+        ai_spoken_as=ai_spoken_as,
+        ii_spoken_as=ii_spoken_as,
     )
 
 
@@ -638,14 +635,14 @@ def extract_pages_text(
     start_idx: int,
     end_idx: int,
     strip_artifacts: bool,
-    ai_spoken_as: str,
-    ii_spoken_as: str,
     stylize_quotes: bool = True,
     patterns: CleaningPatterns | None = None,
+    speech_patterns: CleaningPatterns | None = None,
 ) -> list[str]:
     cleaning = patterns
     if strip_artifacts and cleaning is None:
         cleaning = load_cleaning_patterns()
+    speech = speech_patterns or cleaning or CleaningPatterns()
 
     pages_text: list[str] = []
     skipped_toc = 0
@@ -657,7 +654,11 @@ def extract_pages_text(
                 skipped_toc += 1
                 continue
             text = strip_page_artifacts(text, cleaning)
-        text = apply_pronunciation_fixes(text, ai_spoken_as=ai_spoken_as, ii_spoken_as=ii_spoken_as)
+        text = apply_pronunciation_fixes(
+            text,
+            ai_spoken_as=speech.ai_spoken_as,
+            ii_spoken_as=speech.ii_spoken_as,
+        )
         text = expand_section_references(text)
         normalized = normalize_text(text)
         if strip_artifacts and cleaning is not None:
@@ -2389,9 +2390,10 @@ def main() -> int:
             return 1
 
     pronounce_map: dict[str, str] = {}
+    speech_patterns = CleaningPatterns()
     try:
-        pronounce_source = cleaning_patterns or load_cleaning_patterns(args.patterns_file)
-        pronounce_map = dict(pronounce_source.pronounce)
+        speech_patterns = cleaning_patterns or load_cleaning_patterns(args.patterns_file)
+        pronounce_map = dict(speech_patterns.pronounce)
     except RuntimeError:
         pronounce_map = {}
 
@@ -2453,10 +2455,9 @@ def main() -> int:
         start_idx,
         end_idx,
         strip_artifacts=not args.no_strip_page_artifacts,
-        ai_spoken_as=args.ai_spoken_as,
-        ii_spoken_as=args.ii_spoken_as,
         stylize_quotes=(args.engine == "say"),
         patterns=cleaning_patterns,
+        speech_patterns=speech_patterns,
     )
 
     audio_files: list[pathlib.Path] = []
