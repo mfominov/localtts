@@ -29,8 +29,9 @@ output_audio/*
 # Local source documents (optional, keep private)
 *.pdf
 
-# Local chapter maps
+# Local chapter maps (manual or auto-drafted sidecar next to PDF)
 chapters.txt
+*.chapters.txt
 
 # Piper voice assets (large; keep local)
 models/*.onnx

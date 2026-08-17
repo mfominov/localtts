@@ -36,7 +36,7 @@ make install
 
 ```bash
 make install-piper
-make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make listen-piper PDF=./doc.pdf
 ```
 
 Отдельные targets:
@@ -52,13 +52,13 @@ make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 
 ```bash
 make install-silero
-make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make listen-silero PDF=./doc.pdf
 ```
 
 Голоса: `xenia` (по умолчанию), `aidar`, `baya`, `kseniya`, `eugene`.
 
 ```bash
-FORCE=1 make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt \
+FORCE=1 make listen-silero PDF=./doc.pdf \
   SILERO_SPEAKER=aidar SILERO_SAMPLE_RATE=48000
 ```
 
@@ -75,11 +75,11 @@ Silero синтезирует **по предложениям** и пишет и
 После генерации:
 
 ```bash
-make listen-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make listen-say PDF=./doc.pdf
 # или
-make listen-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make listen-piper PDF=./doc.pdf
 # или
-make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make listen-silero PDF=./doc.pdf
 ```
 
 `make listen-say` / `make listen-piper` / `make listen-silero` сначала делают нарезку, затем открывают плеер.
@@ -87,7 +87,7 @@ make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 Пересборка с нуля (сначала удалит wav/aiff в `OUT_DIR`):
 
 ```bash
-FORCE=1 make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+FORCE=1 make listen-silero PDF=./doc.pdf
 ```
 
 Только открыть готовое:
@@ -140,16 +140,29 @@ make export-audiobook OUT_DIR=output_audio COVER=./cover.jpg BOOK_TITLE="Моя 
 
 ## Навигация по главам
 
-Можно генерировать по одному файлу на главу:
+Обычный happy path — без ручного `CHAPTERS_FILE`:
 
 ```bash
-python3 pdf_to_audio.py ./doc.pdf --mode chapters --out-dir audio_book
+make listen-silero PDF=./doc.pdf
 ```
 
-Как работает:
-- сначала берется PDF оглавление (bookmarks/outlines);
-- если нужен сложный ручной сценарий, можно передать свой файл глав;
-- если оглавления нет, можно сделать fallback по фиксированному числу страниц:
+Порядок выбора глав (`--mode chapters` / `listen-*`):
+1. явный `CHAPTERS_FILE` / `--chapters-file`;
+2. закладки PDF (bookmarks/outline);
+3. уже существующий sidecar рядом с PDF: `doc.pdf` → `doc.chapters.txt` (не перезаписывается при listen);
+4. явный `CHAPTER_PAGES` / `--chapter-pages` > 0;
+5. иначе черновик из текста оглавления → пишется sidecar → **остановка без TTS** (проверь файл и повтори listen);
+6. если ничего не вышло — ошибка с подсказками.
+
+Принудительно пересобрать sidecar (перезапишет правки):
+
+```bash
+make draft-chapters PDF=./doc.pdf
+# или
+python3 pdf_to_audio.py ./doc.pdf --draft-chapters
+```
+
+Фиксированный размер главы без оглавления:
 
 ```bash
 python3 pdf_to_audio.py ./doc.pdf --mode chapters --chapter-pages 20
@@ -157,7 +170,7 @@ python3 pdf_to_audio.py ./doc.pdf --mode chapters --chapter-pages 20
 
 ### Кастомный список глав
 
-Формат файла `chapters.txt`:
+Формат (`chapters.txt` или `{pdf}.chapters.txt`):
 
 ```text
 # Название|start-end
@@ -167,7 +180,7 @@ python3 pdf_to_audio.py ./doc.pdf --mode chapters --chapter-pages 20
 Приложения|90-110
 ```
 
-Запуск:
+Запуск с явным файлом:
 
 ```bash
 python3 pdf_to_audio.py ./doc.pdf --mode chapters --chapters-file ./chapters.txt
@@ -198,9 +211,10 @@ python3 pdf_to_audio.py ./doc.pdf --max-chars 8000
 ```bash
 make run-chapters-say PDF=./doc.pdf
 make run-chapters-say PDF=./doc.pdf CHAPTER_PAGES=20
+make draft-chapters PDF=./doc.pdf
 make run-chapters-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
-make run-chapters-piper PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
-make run-chapters-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+make run-chapters-piper PDF=./doc.pdf
+make run-chapters-silero PDF=./doc.pdf
 ```
 
 ## Параллельная генерация
@@ -208,13 +222,13 @@ make run-chapters-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
 В Makefile дефолт `JOBS=4`. Переопределение:
 
 ```bash
-make run-chapters-say PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt JOBS=2
+make run-chapters-say PDF=./doc.pdf JOBS=2
 ```
 
 Или напрямую:
 
 ```bash
-python3 pdf_to_audio.py ./doc.pdf --mode chapters --chapters-file ./chapters.txt --jobs 4
+python3 pdf_to_audio.py ./doc.pdf --mode chapters --jobs 4
 ```
 
 ### Замеры (один и тот же PDF, 11 глав, `JOBS=4`)
@@ -239,7 +253,7 @@ Wall-clock до `Done in …` (macOS, прогресс `[done/N] +per-file elaps
 Свой шаблон:
 
 ```bash
-PATTERNS_FILE=./my-clean.yml make listen-silero PDF=./doc.pdf CHAPTERS_FILE=./chapters.txt
+PATTERNS_FILE=./my-clean.yml make listen-silero PDF=./doc.pdf
 ```
 
 Отключить очистку полностью:

@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         type=pathlib.Path,
         nargs="?",
         default=None,
-        help="Path to source PDF (not required with --refresh-web or --export-audiobook + --cover)",
+        help="Path to source PDF (required except --refresh-web / --export-audiobook+--cover)",
     )
     parser.add_argument(
         "--out-dir",
@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         "--export-audiobook",
         action="store_true",
         help="Build OUT_DIR/audiobook.m4b from existing chapters manifest (needs ffmpeg)",
+    )
+    parser.add_argument(
+        "--draft-chapters",
+        action="store_true",
+        help="Draft {pdf_stem}.chapters.txt from PDF outline/TOC and exit (no TTS)",
     )
     parser.add_argument(
         "--cover",
@@ -669,6 +674,239 @@ def chapter_ranges_from_file(
         if current[1] < prev[2]:
             raise RuntimeError(f"Overlapping chapter ranges: `{prev[0]}` and `{current[0]}`")
     return ranges
+
+
+def default_chapters_sidecar_path(pdf: pathlib.Path) -> pathlib.Path:
+    """Path next to PDF: doc.pdf → doc.chapters.txt."""
+    return pdf.with_name(f"{pdf.stem}.chapters.txt")
+
+
+_TOC_LEADER_RE = re.compile(
+    r"^(?P<title>.+?)\s*[\.·•…]{2,}\s*(?:стр\.?\s*)?(?P<page>\d{1,4})\s*$",
+    re.IGNORECASE,
+)
+_TOC_TRAILING_PAGE_RE = re.compile(
+    r"^(?P<title>.+?)\s+(?:стр\.?\s*)?(?P<page>\d{1,4})\s*$",
+    re.IGNORECASE,
+)
+
+
+def normalize_toc_title(title: str) -> str:
+    title = title.replace("…", " ")
+    title = re.sub(r"[\.·•]{2,}", " ", title)
+    title = re.sub(r"\s+", " ", title).strip(" .-–—\t")
+    return title
+
+
+def parse_toc_entry_line(line: str) -> tuple[str, int] | None:
+    """Parse one TOC line into (title, 1-based page) or None."""
+    raw = re.sub(r"[ \t]+", " ", (line or "").strip())
+    if not raw or raw.startswith("#"):
+        return None
+    match = _TOC_LEADER_RE.match(raw) or _TOC_TRAILING_PAGE_RE.match(raw)
+    if match is None:
+        return None
+    title = normalize_toc_title(match.group("title"))
+    page = int(match.group("page"))
+    if page < 1 or len(title) < 2:
+        return None
+    if re.fullmatch(r"\d+", title):
+        return None
+    # Avoid matching prose sentences that happen to end with a year-like number.
+    if len(title) > 120:
+        return None
+    return title, page
+
+
+def parse_toc_entries(text: str) -> list[tuple[str, int]]:
+    entries: list[tuple[str, int]] = []
+    seen_pages: set[int] = set()
+    for line in (text or "").splitlines():
+        parsed = parse_toc_entry_line(line)
+        if parsed is None:
+            continue
+        title, page = parsed
+        if page in seen_pages:
+            continue
+        seen_pages.add(page)
+        entries.append((title, page))
+    entries.sort(key=lambda item: item[1])
+    return entries
+
+
+def toc_entries_to_ranges(
+    entries: Sequence[tuple[str, int]],
+    *,
+    total_pages: int,
+    start_idx: int,
+    end_idx: int,
+) -> list[tuple[str, int, int]]:
+    """Convert 1-based TOC starts to clipped half-open chapter ranges."""
+    if not entries:
+        return []
+    starts: list[tuple[str, int]] = []
+    for title, page_1based in entries:
+        if page_1based < 1 or page_1based > total_pages:
+            continue
+        page0 = page_1based - 1
+        if page0 < start_idx or page0 >= end_idx:
+            continue
+        starts.append((title, page0))
+    if not starts:
+        return []
+
+    ranges: list[tuple[str, int, int]] = []
+    for idx, (title, start_page) in enumerate(starts):
+        end_page = starts[idx + 1][1] if idx + 1 < len(starts) else end_idx
+        clipped_start = max(start_page, start_idx)
+        clipped_end = min(end_page, end_idx)
+        if clipped_start < clipped_end:
+            ranges.append((title, clipped_start, clipped_end))
+    return ranges
+
+
+def collect_toc_text(
+    reader: Any,
+    *,
+    start_idx: int,
+    end_idx: int,
+    patterns: CleaningPatterns,
+    fallback_pages: int = 8,
+) -> tuple[str, str]:
+    """Return (text, source_label). Prefer is_toc_page pages; else first N pages."""
+    toc_chunks: list[str] = []
+    for page_idx in range(start_idx, end_idx):
+        raw = reader.pages[page_idx].extract_text() or ""
+        if is_toc_page(raw, patterns):
+            toc_chunks.append(raw)
+    if toc_chunks:
+        return "\n".join(toc_chunks), "toc-pages"
+    limit = min(end_idx, start_idx + max(1, fallback_pages))
+    fallback = [reader.pages[page_idx].extract_text() or "" for page_idx in range(start_idx, limit)]
+    return "\n".join(fallback), f"first-{limit - start_idx}-pages"
+
+
+def write_chapters_file(
+    path: pathlib.Path,
+    ranges: Sequence[tuple[str, int, int]],
+    *,
+    header_note: str = "Auto-drafted chapters. Review before listen.",
+) -> pathlib.Path:
+    lines = [f"# {header_note}", "# Title|start-end"]
+    for title, start0, end0 in ranges:
+        # end0 is exclusive → inclusive 1-based end
+        lines.append(f"{title}|{start0 + 1}-{end0}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def draft_chapter_ranges_from_toc(
+    reader: Any,
+    *,
+    total_pages: int,
+    start_idx: int,
+    end_idx: int,
+    patterns: CleaningPatterns,
+) -> list[tuple[str, int, int]]:
+    text, _source = collect_toc_text(
+        reader,
+        start_idx=start_idx,
+        end_idx=end_idx,
+        patterns=patterns,
+    )
+    entries = parse_toc_entries(text)
+    return toc_entries_to_ranges(
+        entries,
+        total_pages=total_pages,
+        start_idx=start_idx,
+        end_idx=end_idx,
+    )
+
+
+def resolve_chapter_ranges(
+    reader: Any,
+    *,
+    pdf: pathlib.Path,
+    total_pages: int,
+    start_idx: int,
+    end_idx: int,
+    chapters_file: pathlib.Path | None,
+    chapter_pages: int,
+    patterns: CleaningPatterns | None,
+    draft_chapters: bool = False,
+) -> tuple[list[tuple[str, int, int]], pathlib.Path | None, str]:
+    """Resolve chapter ranges.
+
+    Returns (ranges, sidecar_path_or_none, source_label).
+    If TOC draft was written and TTS should stop, ranges is empty and
+    source_label starts with ``drafted:``.
+    """
+    sidecar = default_chapters_sidecar_path(pdf)
+
+    if draft_chapters:
+        if patterns is None:
+            raise RuntimeError("Cleaning patterns are required to draft chapters from TOC")
+        outline = chapter_ranges_from_outline(reader, start_idx, end_idx)
+        if outline:
+            write_chapters_file(
+                sidecar,
+                outline,
+                header_note="Drafted from PDF outline (bookmarks). Review before listen.",
+            )
+            return [], sidecar, f"drafted:outline:{sidecar}"
+        ranges = draft_chapter_ranges_from_toc(
+            reader,
+            total_pages=total_pages,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            patterns=patterns,
+        )
+        if not ranges:
+            raise RuntimeError(
+                "Could not draft chapters from PDF outline or TOC text. "
+                "Pass --chapters-file or --chapter-pages N."
+            )
+        write_chapters_file(sidecar, ranges)
+        return [], sidecar, f"drafted:toc:{sidecar}"
+
+    if chapters_file is not None:
+        ranges = chapter_ranges_from_file(chapters_file, total_pages, start_idx, end_idx)
+        if ranges:
+            return ranges, None, f"file:{chapters_file}"
+
+    outline = chapter_ranges_from_outline(reader, start_idx, end_idx)
+    if outline:
+        return outline, None, "outline"
+
+    if sidecar.exists():
+        ranges = chapter_ranges_from_file(sidecar, total_pages, start_idx, end_idx)
+        if ranges:
+            return ranges, sidecar, f"sidecar:{sidecar}"
+
+    if chapter_pages > 0:
+        ranges = chapter_ranges_by_fixed_size(start_idx, end_idx, chapter_pages)
+        if ranges:
+            return ranges, None, f"fixed:{chapter_pages}"
+
+    if patterns is None:
+        raise RuntimeError(
+            "No chapters found (no outline/sidecar). "
+            "Install cleaning patterns or pass --chapters-file / --chapter-pages N."
+        )
+    ranges = draft_chapter_ranges_from_toc(
+        reader,
+        total_pages=total_pages,
+        start_idx=start_idx,
+        end_idx=end_idx,
+        patterns=patterns,
+    )
+    if not ranges:
+        raise RuntimeError(
+            "No chapters found. PDF has no bookmarks/usable TOC. "
+            f"Create {sidecar.name} manually, or pass --chapters-file / --chapter-pages N."
+        )
+    write_chapters_file(sidecar, ranges)
+    return [], sidecar, f"drafted:toc:{sidecar}"
 
 
 def clean_output_dir(output_dir: pathlib.Path) -> int:
@@ -1776,6 +2014,44 @@ def main() -> int:
         print(f"Cover: {args.out_dir / 'cover.jpg'}")
         return 0
 
+    if args.pdf is None:
+        print("PDF path is required (or use --refresh-web / --export-audiobook).", file=sys.stderr)
+        return 1
+    if not args.pdf.exists():
+        print(f"PDF file not found: {args.pdf}", file=sys.stderr)
+        return 1
+
+    if args.draft_chapters:
+        try:
+            cleaning_patterns = load_cleaning_patterns(args.patterns_file)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        reader = get_pdf_reader(args.pdf)
+        total_pages = len(reader.pages)
+        start_idx, end_idx = resolve_page_range(total_pages, args.start_page, args.end_page)
+        try:
+            _ranges, sidecar, source = resolve_chapter_ranges(
+                reader,
+                pdf=args.pdf,
+                total_pages=total_pages,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                chapters_file=None,
+                chapter_pages=0,
+                patterns=cleaning_patterns,
+                draft_chapters=True,
+            )
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        assert sidecar is not None
+        drafted = chapter_ranges_from_file(sidecar, total_pages, start_idx, end_idx)
+        print(f"Drafted {sidecar} ({len(drafted)} chapters) [{source}]")
+        print("Review the file, then re-run listen (sidecar is picked up automatically):")
+        print(f"  make listen-silero PDF={args.pdf}")
+        return 0
+
     started_at = time.perf_counter()
 
     if args.engine == "say" and not shutil.which("say"):
@@ -1799,13 +2075,6 @@ def main() -> int:
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-    if args.pdf is None:
-        print("PDF path is required (or use --refresh-web).", file=sys.stderr)
-        return 1
-
-    if not args.pdf.exists():
-        print(f"PDF file not found: {args.pdf}", file=sys.stderr)
-        return 1
     if args.jobs < 1:
         print("`--jobs` must be >= 1.", file=sys.stderr)
         return 1
@@ -1821,15 +2090,59 @@ def main() -> int:
             print(str(exc), file=sys.stderr)
             return 1
 
+    reader = get_pdf_reader(args.pdf)
+    total_pages = len(reader.pages)
+    start_idx, end_idx = resolve_page_range(total_pages, args.start_page, args.end_page)
+
+    chapter_ranges: list[tuple[str, int, int]] = []
+    chapter_source = ""
+    if args.mode == "chapters":
+        resolve_patterns = cleaning_patterns
+        if resolve_patterns is None:
+            try:
+                resolve_patterns = load_cleaning_patterns(args.patterns_file)
+            except RuntimeError:
+                resolve_patterns = None
+        try:
+            chapter_ranges, _sidecar, chapter_source = resolve_chapter_ranges(
+                reader,
+                pdf=args.pdf,
+                total_pages=total_pages,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                chapters_file=args.chapters_file,
+                chapter_pages=args.chapter_pages,
+                patterns=resolve_patterns,
+                draft_chapters=False,
+            )
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if not chapter_ranges and chapter_source.startswith("drafted:"):
+            sidecar_path = default_chapters_sidecar_path(args.pdf)
+            drafted = chapter_ranges_from_file(sidecar_path, total_pages, start_idx, end_idx)
+            print(
+                f"Drafted {sidecar_path} ({len(drafted)} chapters). "
+                "Review the file, then re-run the same listen command "
+                "(existing sidecar is used automatically).",
+                flush=True,
+            )
+            return 0
+
+        if not chapter_ranges:
+            print(
+                "No chapters found. Use --chapters-file, PDF outline, or --chapter-pages N.",
+                file=sys.stderr,
+            )
+            return 1
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
     if args.clean_out_dir:
         removed = clean_output_dir(args.out_dir)
         if removed:
             print(f"Removed {removed} old audio/playlist file(s) from {args.out_dir}")
 
-    reader = get_pdf_reader(args.pdf)
-    total_pages = len(reader.pages)
-    start_idx, end_idx = resolve_page_range(total_pages, args.start_page, args.end_page)
     pages_text = extract_pages_text(
         reader,
         start_idx,
@@ -1860,24 +2173,11 @@ def main() -> int:
     )
 
     if args.mode == "chapters":
-        chapter_ranges: list[tuple[str, int, int]] = []
-        if args.chapters_file is not None:
-            chapter_ranges = chapter_ranges_from_file(
-                args.chapters_file, total_pages, start_idx, end_idx
-            )
-        if not chapter_ranges:
-            chapter_ranges = chapter_ranges_from_outline(reader, start_idx, end_idx)
-        if not chapter_ranges:
-            chapter_ranges = chapter_ranges_by_fixed_size(start_idx, end_idx, args.chapter_pages)
-
-        if not chapter_ranges:
-            print(
-                "No chapters found. Use --chapters-file, PDF outline, or --chapter-pages N.",
-                file=sys.stderr,
-            )
-            return 1
-
-        print(f"Generating {len(chapter_ranges)} chapter audio files with {engine_label}...")
+        print(
+            f"Generating {len(chapter_ranges)} chapter audio files with {engine_label} "
+            f"[{chapter_source}]...",
+            flush=True,
+        )
         chapter_jobs: list[tuple[int, pathlib.Path, str]] = []
         titles_by_idx: dict[int, str] = {}
         for idx, (title, chapter_start, chapter_end) in enumerate(chapter_ranges, start=1):

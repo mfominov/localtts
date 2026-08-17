@@ -34,7 +34,7 @@ BITRATE ?= 96k
 PIPER_MODEL_URL ?= https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx
 PIPER_CONFIG_URL ?= https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json
 
-.PHONY: help venv install install-piper install-silero install-audiobook run run-chapters run-chapters-say run-chapters-piper run-chapters-silero play listen listen-say listen-piper listen-silero serve refresh-web export-audiobook voices clean clean-audio
+.PHONY: help venv install install-piper install-silero install-audiobook run run-chapters run-chapters-say run-chapters-piper run-chapters-silero play listen listen-say listen-piper listen-silero serve refresh-web export-audiobook draft-chapters voices clean clean-audio
 
 help:
 	@echo "Targets:"
@@ -50,6 +50,7 @@ help:
 	@echo "  make listen-say PDF=/path          - say chapters + open player"
 	@echo "  make listen-piper PDF=/path        - Piper chapters + open player"
 	@echo "  make listen-silero PDF=/path       - Silero chapters + open player"
+	@echo "  make draft-chapters PDF=/path      - draft {pdf}.chapters.txt from outline/TOC"
 	@echo "  make serve            - only open browser player for existing OUT_DIR"
 	@echo "  make play             - play OUT_DIR/playlist.m3u in VLC"
 	@echo "  make refresh-web      - update player + section markers without re-TTS"
@@ -61,6 +62,7 @@ help:
 	@echo "Aliases: run-chapters -> run-chapters-say, listen -> listen-say"
 	@echo "listen-* skips TTS if OUT_DIR already has audio (use FORCE=1 to rebuild)."
 	@echo "KEEP=1 keeps old files during rebuild (default: clean OUT_DIR first)."
+	@echo "Chapters: PDF bookmarks → existing {pdf}.chapters.txt → TOC draft → stop for review."
 	@echo ""
 	@echo "Run options:"
 	@echo "  OUT_DIR=$(OUT_DIR) VOICE=$(VOICE) PIPER_MODEL=$(PIPER_MODEL)"
@@ -200,8 +202,10 @@ listen:
 		echo "To regenerate (cleans OUT_DIR first): FORCE=1 make PDF=..."; \
 		$(MAKE) serve OUT_DIR="$(OUT_DIR)" PORT="$(PORT)"; \
 	elif [ -z "$(PDF)" ]; then \
-		echo "Usage: make listen-say|listen-piper|listen-silero|PDF=/path/to/file.pdf [CHAPTERS_FILE=chapters.txt ...]"; \
+		echo "Usage: make listen-say|listen-piper|listen-silero PDF=/path/to/file.pdf"; \
+		echo "       Chapters: bookmarks → {pdf}.chapters.txt → TOC draft (review) → CHAPTERS_FILE/CHAPTER_PAGES"; \
 		echo "       FORCE=1 make PDF=...   # rebuild from scratch"; \
+		echo "       make draft-chapters PDF=...         # overwrite sidecar from outline/TOC"; \
 		echo "       make serve                          # open existing OUT_DIR only"; \
 		exit 1; \
 	else \
@@ -237,6 +241,21 @@ serve:
 	@echo "Open http://127.0.0.1:$(PORT)/player.html"
 	@open "http://127.0.0.1:$(PORT)/player.html" || true
 	@$(PYTHON) serve_player.py --directory "$(OUT_DIR)" --port "$(PORT)" --bind 127.0.0.1
+
+draft-chapters:
+	@if [ -z "$(PDF)" ]; then \
+		echo "Usage: make draft-chapters PDF=/path/to/file.pdf"; \
+		exit 1; \
+	fi
+	@if [ -x "$(BIN)/python" ]; then \
+		PY="$(BIN)/python"; \
+	else \
+		PY="$(PYTHON)"; \
+	fi; \
+	$$PY $(SCRIPT) "$(PDF)" --draft-chapters \
+		--start-page "$(START_PAGE)" \
+		--end-page "$(END_PAGE)" \
+		--patterns-file "$(PATTERNS_FILE)"
 
 refresh-web:
 	@if [ -x "$(BIN)/python" ]; then \
