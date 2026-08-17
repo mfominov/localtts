@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 import wave
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -1411,7 +1412,14 @@ def load_silero_model(model_id: str) -> Any:
             raise RuntimeError("Silero deps missing. Install with: make install-silero") from exc
 
         # Do not call model.to()/eval() — packaged Silero wrappers break on that.
-        model, _example = silero_tts(language="ru", speaker=model_id)
+        # Torch emits TypedStorage deprecation from package_importer during load.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*TypedStorage is deprecated.*",
+                category=UserWarning,
+            )
+            model, _example = silero_tts(language="ru", speaker=model_id)
         _silero_models[model_id] = model
         return model
 
@@ -1793,7 +1801,7 @@ def render_pdf_cover(
     dest: pathlib.Path,
 ) -> pathlib.Path:
     try:
-        import fitz
+        import pymupdf
     except ImportError as exc:
         raise RuntimeError(
             "pymupdf is required to render a cover from PDF. "
@@ -1801,14 +1809,14 @@ def render_pdf_cover(
         ) from exc
     if cover_page < 1:
         raise RuntimeError("--cover-page must be >= 1")
-    doc = fitz.open(pdf)
+    doc = pymupdf.open(pdf)
     try:
         if cover_page > doc.page_count:
             raise RuntimeError(
                 f"--cover-page {cover_page} out of range (PDF has {doc.page_count} page(s))"
             )
         page = doc.load_page(cover_page - 1)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
         dest.parent.mkdir(parents=True, exist_ok=True)
         pix.save(str(dest))
     finally:
