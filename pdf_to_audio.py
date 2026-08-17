@@ -233,6 +233,8 @@ class SkipTocConfig:
     keyword_line_ratio: float = 0.12
     leader_pattern: str = r"\.{2,}\s*\d{1,4}\s*$"
     leader_line_ratio: float = 0.35
+    page_only_pattern: str = r"^(?:стр\.?\s*)?\d{1,4}\s*$"
+    page_only_line_ratio: float = 0.35
 
 
 @dataclass
@@ -294,6 +296,8 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         keyword_line_ratio=float(toc_raw.get("keyword_line_ratio", 0.12)),
         leader_pattern=str(toc_raw.get("leader_pattern", r"\.{2,}\s*\d{1,4}\s*$")),
         leader_line_ratio=float(toc_raw.get("leader_line_ratio", 0.35)),
+        page_only_pattern=str(toc_raw.get("page_only_pattern", r"^(?:стр\.?\s*)?\d{1,4}\s*$")),
+        page_only_line_ratio=float(toc_raw.get("page_only_line_ratio", 0.35)),
     )
     return CleaningPatterns(line_drop=line_drop, inline_sub=inline_sub, skip_toc=skip_toc)
 
@@ -314,15 +318,23 @@ def is_toc_page(text: str, patterns: CleaningPatterns) -> bool:
         )
     leader_re = re.compile(cfg.leader_pattern)
     leader_hits = sum(1 for line in lines if leader_re.search(line))
+    page_only_re = re.compile(cfg.page_only_pattern, re.IGNORECASE)
+    page_only_hits = sum(1 for line in lines if page_only_re.match(line))
     keyword_ratio = keyword_hits / float(len(lines))
     leader_ratio = leader_hits / float(len(lines))
+    page_only_ratio = page_only_hits / float(len(lines))
 
     if leader_ratio >= cfg.leader_line_ratio:
+        return True
+    if page_only_ratio >= cfg.page_only_line_ratio:
         return True
     if keyword_ratio >= cfg.keyword_line_ratio:
         return True
     # Keyword header + moderate leaders (typical TOC)
-    return keyword_hits >= 1 and leader_ratio >= max(cfg.leader_line_ratio * 0.45, 0.15)
+    if keyword_hits >= 1 and leader_ratio >= max(cfg.leader_line_ratio * 0.45, 0.15):
+        return True
+    # Keyword header + stacked page column (title\\npage)
+    return keyword_hits >= 1 and page_only_ratio >= max(cfg.page_only_line_ratio * 0.45, 0.15)
 
 
 def strip_page_artifacts(text: str, patterns: CleaningPatterns | None = None) -> str:
@@ -624,21 +636,27 @@ def chapter_ranges_from_file(
         if not line or line.startswith("#"):
             continue
 
-        if "|" not in line or "-" not in line:
+        if "|" not in line:
             raise RuntimeError(
-                f"Invalid chapters file format at line {line_number}: expected `Title|start-end`"
+                f"Invalid chapters file format at line {line_number}: "
+                "expected `Title|start-end` or `Title|page`"
             )
 
         title_part, pages_part = line.split("|", 1)
-        start_part, end_part = pages_part.split("-", 1)
-
         title = title_part.strip()
+        pages_part = pages_part.strip()
         if not title:
             raise RuntimeError(f"Invalid empty chapter title at line {line_number}")
 
         try:
-            start_page = int(start_part.strip())
-            end_page_inclusive = int(end_part.strip())
+            if "-" in pages_part:
+                start_part, end_part = pages_part.split("-", 1)
+                start_page = int(start_part.strip())
+                end_page_inclusive = int(end_part.strip())
+            else:
+                # Single page: `ЗАКЛЮЧЕНИЕ|132`
+                start_page = int(pages_part)
+                end_page_inclusive = start_page
         except ValueError as exc:
             raise RuntimeError(
                 f"Invalid page numbers at line {line_number}: `{pages_part}`"
@@ -689,6 +707,21 @@ _TOC_TRAILING_PAGE_RE = re.compile(
     r"^(?P<title>.+?)\s+(?:стр\.?\s*)?(?P<page>\d{1,4})\s*$",
     re.IGNORECASE,
 )
+_TOC_PAGE_ONLY_RE = re.compile(r"^(?:стр\.?\s*)?(?P<page>\d{1,4})\s*$", re.IGNORECASE)
+_TOC_HEADER_TITLES = frozenset(
+    {
+        "содержание",
+        "оглавление",
+        "список таблиц",
+        "список рисунков",
+        "table of contents",
+        "contents",
+    }
+)
+_TOP_LEVEL_TOC_RE = re.compile(
+    r"^(?:ЧАСТЬ\s+\d+|РЕЗЮМЕ\b|ЗАКЛЮЧЕНИЕ\b|ПРИЛОЖЕНИЕ\b|ГЛОССАРИЙ\b)",
+    re.IGNORECASE,
+)
 
 
 def normalize_toc_title(title: str) -> str:
@@ -696,6 +729,47 @@ def normalize_toc_title(title: str) -> str:
     title = re.sub(r"[\.·•]{2,}", " ", title)
     title = re.sub(r"\s+", " ", title).strip(" .-–—\t")
     return title
+
+
+def is_top_level_toc_title(title: str) -> bool:
+    """True for major chapter headings (ЧАСТЬ / РЕЗЮМЕ / ALL CAPS), not 1.1 subsections."""
+    text = normalize_toc_title(title)
+    if not text or text.casefold() in _TOC_HEADER_TITLES:
+        return False
+    if re.match(r"^\d+\.\d+", text):
+        return False
+    if _TOP_LEVEL_TOC_RE.match(text):
+        return True
+    letters = [char for char in text if char.isalpha()]
+    return len(letters) >= 4 and all(char.isupper() for char in letters)
+
+
+def toc_entry_rank(title: str) -> int:
+    return 2 if is_top_level_toc_title(title) else 1
+
+
+def select_chapter_toc_entries(
+    entries: Sequence[tuple[str, int]],
+) -> list[tuple[str, int]]:
+    """Keep major TOC headings for chapter splits; fall back if too few."""
+    top = [(title, page) for title, page in entries if is_top_level_toc_title(title)]
+    return top if len(top) >= 2 else list(entries)
+
+
+def _upsert_toc_entry(
+    by_page: dict[int, tuple[str, int]],
+    title: str,
+    page: int,
+) -> None:
+    rank = toc_entry_rank(title)
+    previous = by_page.get(page)
+    if previous is None or rank > previous[1]:
+        by_page[page] = (title, rank)
+
+
+def _is_toc_year_page(page: int) -> bool:
+    """Years in titles (2026, 2030) must not become page numbers."""
+    return 1900 <= page <= 2099
 
 
 def parse_toc_entry_line(line: str) -> tuple[str, int] | None:
@@ -708,30 +782,101 @@ def parse_toc_entry_line(line: str) -> tuple[str, int] | None:
         return None
     title = normalize_toc_title(match.group("title"))
     page = int(match.group("page"))
-    if page < 1 or len(title) < 2:
+    if page < 1 or _is_toc_year_page(page) or len(title) < 2:
         return None
     if re.fullmatch(r"\d+", title):
         return None
     # Avoid matching prose sentences that happen to end with a year-like number.
     if len(title) > 120:
         return None
+    if title.casefold() in _TOC_HEADER_TITLES:
+        return None
     return title, page
 
 
+def parse_toc_page_only_line(line: str) -> int | None:
+    match = _TOC_PAGE_ONLY_RE.match((line or "").strip())
+    if match is None:
+        return None
+    page = int(match.group("page"))
+    if page < 1 or _is_toc_year_page(page):
+        return None
+    return page
+
+
 def parse_toc_entries(text: str) -> list[tuple[str, int]]:
-    entries: list[tuple[str, int]] = []
-    seen_pages: set[int] = set()
-    for line in (text or "").splitlines():
-        parsed = parse_toc_entry_line(line)
-        if parsed is None:
+    """Parse TOC text: same-line leaders, or stacked title(s) then page number(s)."""
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in (text or "").splitlines()]
+    lines = [line for line in lines if line and not line.startswith("#")]
+    counts: dict[str, int] = {}
+    for line in lines:
+        counts[line] = counts.get(line, 0) + 1
+    # Repeated running headers/footers only — page numbers often repeat across entries.
+    noise = {
+        line
+        for line, count in counts.items()
+        if count >= 2 and parse_toc_page_only_line(line) is None
+    }
+
+    by_page: dict[int, tuple[str, int]] = {}
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if line in noise:
+            idx += 1
             continue
-        title, page = parsed
-        if page in seen_pages:
+
+        single = parse_toc_entry_line(line)
+        if single is not None:
+            title, page = single
+            _upsert_toc_entry(by_page, title, page)
+            idx += 1
             continue
-        seen_pages.add(page)
-        entries.append((title, page))
-    entries.sort(key=lambda item: item[1])
-    return entries
+
+        if parse_toc_page_only_line(line) is not None:
+            idx += 1
+            continue
+
+        title_parts: list[str] = []
+        while idx < len(lines):
+            cur = lines[idx]
+            if cur in noise:
+                idx += 1
+                continue
+            if parse_toc_entry_line(cur) is not None:
+                break
+            page = parse_toc_page_only_line(cur)
+            if page is not None:
+                # Folio + TOC page on consecutive lines: take the last. Do not
+                # skip noise here — that would glue the next section's folio.
+                idx += 1
+                while idx < len(lines):
+                    nxt_page = parse_toc_page_only_line(lines[idx])
+                    if nxt_page is None:
+                        break
+                    page = nxt_page
+                    idx += 1
+                title = normalize_toc_title(" ".join(title_parts))
+                if (
+                    title
+                    and len(title) >= 2
+                    and title.casefold() not in _TOC_HEADER_TITLES
+                    and not re.fullmatch(r"\d+", title)
+                ):
+                    _upsert_toc_entry(by_page, title, page)
+                title_parts = []
+                break
+            if cur.casefold() in _TOC_HEADER_TITLES and not title_parts:
+                idx += 1
+                continue
+            title_parts.append(cur)
+            idx += 1
+        else:
+            break
+        if title_parts and idx >= len(lines):
+            break
+
+    return [(title, page) for page, (title, _rank) in sorted(by_page.items())]
 
 
 def toc_entries_to_ranges(
@@ -814,7 +959,7 @@ def draft_chapter_ranges_from_toc(
         end_idx=end_idx,
         patterns=patterns,
     )
-    entries = parse_toc_entries(text)
+    entries = select_chapter_toc_entries(parse_toc_entries(text))
     return toc_entries_to_ranges(
         entries,
         total_pages=total_pages,

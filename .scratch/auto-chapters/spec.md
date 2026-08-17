@@ -15,7 +15,10 @@ Resolution order (chapters mode):
 6. Parse failure → clear error + hints
 
 - `make draft-chapters` / `--draft-chapters`: always regenerate/overwrite sidecar
-- Parser: dotted leaders + trailing page; normalize dots / `стр.`
+- Parser: dotted leaders + trailing page + stacked title/page lines; normalize dots / `стр.`; reject years as pages
+- Draft chapters = **top-level TOC only** (`ЧАСТЬ N`, `РЕЗЮМЕ`, `ЗАКЛЮЧЕНИЕ`, `ПРИЛОЖЕНИЕ`, `ГЛОССАРИЙ`, ALL CAPS); subsections like `1.1` excluded
+- Same PDF page: prefer top-level title over subsection when deduping
+- `is_toc_page`: also high ratio of page-only lines (stacked TOC without leaders)
 - Tests: inline TOC fixtures → ranges
 - README: happy path without `CHAPTERS_FILE`
 

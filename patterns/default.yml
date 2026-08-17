@@ -37,3 +37,6 @@ skip_toc:
   # Dotted leaders like "Глава 1 .......... 12"
   leader_pattern: '\.{2,}\s*\d{1,4}\s*$'
   leader_line_ratio: 0.35
+  # Stacked TOC: title on one line, page number on the next
+  page_only_pattern: '^(?:стр\.?\s*)?\d{1,4}\s*$'
+  page_only_line_ratio: 0.35

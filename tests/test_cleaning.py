@@ -64,6 +64,27 @@ class CleaningPatternsTests(unittest.TestCase):
         )
         self.assertFalse(ltts.is_toc_page(page, self.patterns))
 
+    def test_stacked_toc_page_detected_by_page_only_ratio(self) -> None:
+        # Title and page number on separate lines (no dotted leaders).
+        toc = "\n".join(
+            [
+                "СОДЕРЖАНИЕ",
+                "РЕЗЮМЕ",
+                "6",
+                "ЧАСТЬ 1",
+                "10",
+                "1.1 Раздел",
+                "11",
+                "1.2 Раздел",
+                "13",
+                "ЧАСТЬ 2",
+                "20",
+                "2.1 Раздел",
+                "21",
+            ]
+        )
+        self.assertTrue(ltts.is_toc_page(toc, self.patterns))
+
     def test_custom_patterns_file_override(self) -> None:
         yaml_text = """
 line_drop:
