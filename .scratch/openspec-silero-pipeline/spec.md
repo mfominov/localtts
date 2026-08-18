@@ -8,9 +8,10 @@
 
 - Success metric: ear quality on real PDFs (not engineering purity).
 - Keep letter-style `pronounce:` / `ai_spoken_as` (not OpenSpec full ABBR expansions).
-- First slice: **NUM v1** — numbers/dates/%/currency/№ → speech (`normalize_numbers.py`, pre-synth).
-- Near-term **non-goals:** Speech IR, OCR, tables, LUFS/reverb, full SSML adapter.
-- This file is a **backlog / reference**, not an implementation mandate.
+- First slice: **NUM v1** — done (`normalize_numbers.py`).
+- Next slice: **RU v1** — Silero `put_yo`/`put_accent` + `homographs:` (`+` stress); see `.scratch/silero-homographs/spec.md`.
+- Then: pauses/chunk → dialogue (Silero).
+- Near-term **non-goals:** Speech IR, OCR, tables, LUFS/reverb, full SSML adapter, full ABBR expansions.
 
 ### Backlog (from OpenSpec, unscheduled)
 
@@ -19,7 +20,7 @@
 - `chapters.json` IR
 - Table narration
 - Full abbreviation expansion + context tiers
-- ё / stress / `put_yo`/`put_accent`
+- External stress resolver (`ruaccent`) beyond Silero flags/homographs
 - Dialogue prosody + configurable pauses
 - Speech IR + Silero Adapter
 - Per-chunk retry + diagnostic event schema

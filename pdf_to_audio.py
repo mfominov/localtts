@@ -237,6 +237,9 @@ class CleaningPatterns:
     ai_spoken_as: str = "эй ай"
     ii_spoken_as: str = "и и"
     normalize_numbers: bool = True
+    silero_put_yo: bool = True
+    silero_put_accent: bool = True
+    homographs: dict[str, str] = field(default_factory=dict)
 
 
 def _compile_regex_flags(flags: Any) -> int:
@@ -304,6 +307,17 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
     ii_spoken_as = str(raw.get("ii_spoken_as") or "и и").strip() or "и и"
     normalize_numbers = bool(raw.get("normalize_numbers", True))
 
+    silero_raw = raw.get("silero") or {}
+    if silero_raw and not isinstance(silero_raw, dict):
+        raise RuntimeError(f"Invalid silero section in {patterns_path}")
+    silero_put_yo = bool(silero_raw.get("put_yo", True))
+    silero_put_accent = bool(silero_raw.get("put_accent", True))
+
+    homographs_raw = raw.get("homographs") or {}
+    if homographs_raw and not isinstance(homographs_raw, dict):
+        raise RuntimeError(f"Invalid homographs section in {patterns_path}")
+    homographs = {str(key): str(value) for key, value in homographs_raw.items() if str(key).strip()}
+
     return CleaningPatterns(
         line_drop=line_drop,
         inline_sub=inline_sub,
@@ -312,6 +326,9 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         ai_spoken_as=ai_spoken_as,
         ii_spoken_as=ii_spoken_as,
         normalize_numbers=normalize_numbers,
+        silero_put_yo=silero_put_yo,
+        silero_put_accent=silero_put_accent,
+        homographs=homographs,
     )
 
 
@@ -527,6 +544,7 @@ def prepare_tts_spoken_text(
     pronounce: dict[str, str] | None = None,
     *,
     normalize_numbers: bool = True,
+    homographs: dict[str, str] | None = None,
 ) -> str:
     """TTS-only transforms; do not use for UI/cues storage."""
     from normalize_numbers import normalize_numbers_for_speech
@@ -535,6 +553,8 @@ def prepare_tts_spoken_text(
     spoken = expand_section_ref_digits_to_words(spoken)
     spoken = normalize_numbers_for_speech(spoken, enabled=normalize_numbers)
     spoken = apply_pronounce_map(spoken, pronounce)
+    # Homograph +stress markers are Silero-only; callers pass homographs only for silero.
+    spoken = apply_pronounce_map(spoken, homographs)
     return spoken
 
 
@@ -1619,6 +1639,9 @@ def synthesize_with_silero(
     *,
     pronounce: dict[str, str] | None = None,
     normalize_numbers: bool = True,
+    homographs: dict[str, str] | None = None,
+    put_yo: bool = True,
+    put_accent: bool = True,
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -1653,10 +1676,19 @@ def synthesize_with_silero(
                     )
                     continue
                 tts_part = prepare_tts_spoken_text(
-                    part, pronounce, normalize_numbers=normalize_numbers
+                    part,
+                    pronounce,
+                    normalize_numbers=normalize_numbers,
+                    homographs=homographs,
                 )
                 try:
-                    audio = model.apply_tts(text=tts_part, speaker=speaker, sample_rate=sample_rate)
+                    audio = model.apply_tts(
+                        text=tts_part,
+                        speaker=speaker,
+                        sample_rate=sample_rate,
+                        put_yo=put_yo,
+                        put_accent=put_accent,
+                    )
                 except ValueError:
                     skipped += 1
                     print(
@@ -1728,6 +1760,9 @@ def synthesize_chunk(
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     pronounce: dict[str, str] | None = None,
     normalize_numbers: bool = True,
+    homographs: dict[str, str] | None = None,
+    silero_put_yo: bool = True,
+    silero_put_accent: bool = True,
 ) -> None:
     if engine == "piper":
         if piper_model is None:
@@ -1750,6 +1785,9 @@ def synthesize_chunk(
             sentence_gap=silero_sentence_gap,
             pronounce=pronounce,
             normalize_numbers=normalize_numbers,
+            homographs=homographs,
+            put_yo=silero_put_yo,
+            put_accent=silero_put_accent,
         )
         return
     synthesize_with_say(
@@ -1794,6 +1832,9 @@ def synthesize_job(
     silero_sentence_gap: float,
     pronounce: dict[str, str] | None = None,
     normalize_numbers: bool = True,
+    homographs: dict[str, str] | None = None,
+    silero_put_yo: bool = True,
+    silero_put_accent: bool = True,
 ) -> tuple[int, pathlib.Path, float]:
     idx, output_file, text = job
     started = time.perf_counter()
@@ -1809,6 +1850,9 @@ def synthesize_job(
         silero_sentence_gap=silero_sentence_gap,
         pronounce=pronounce,
         normalize_numbers=normalize_numbers,
+        homographs=homographs,
+        silero_put_yo=silero_put_yo,
+        silero_put_accent=silero_put_accent,
     )
     return idx, output_file, time.perf_counter() - started
 
@@ -1826,6 +1870,9 @@ def run_jobs(
     started_at: float | None = None,
     pronounce: dict[str, str] | None = None,
     normalize_numbers: bool = True,
+    homographs: dict[str, str] | None = None,
+    silero_put_yo: bool = True,
+    silero_put_accent: bool = True,
 ) -> list[pathlib.Path]:
     if started_at is None:
         started_at = time.perf_counter()
@@ -1839,6 +1886,9 @@ def run_jobs(
         silero_sentence_gap=silero_sentence_gap,
         pronounce=pronounce,
         normalize_numbers=normalize_numbers,
+        homographs=homographs,
+        silero_put_yo=silero_put_yo,
+        silero_put_accent=silero_put_accent,
     )
     if workers <= 1:
         result: list[pathlib.Path] = []
@@ -1875,6 +1925,9 @@ def run_jobs(
                 silero_sentence_gap,
                 pronounce,
                 normalize_numbers,
+                homographs,
+                silero_put_yo,
+                silero_put_accent,
             )
             for job in jobs
         ]
@@ -2425,14 +2478,23 @@ def main() -> int:
 
     pronounce_map: dict[str, str] = {}
     normalize_numbers = True
+    homographs_map: dict[str, str] = {}
+    silero_put_yo = True
+    silero_put_accent = True
     speech_patterns = CleaningPatterns()
     try:
         speech_patterns = cleaning_patterns or load_cleaning_patterns(args.patterns_file)
         pronounce_map = dict(speech_patterns.pronounce)
         normalize_numbers = speech_patterns.normalize_numbers
+        homographs_map = dict(speech_patterns.homographs)
+        silero_put_yo = speech_patterns.silero_put_yo
+        silero_put_accent = speech_patterns.silero_put_accent
     except RuntimeError:
         pronounce_map = {}
         normalize_numbers = True
+        homographs_map = {}
+        silero_put_yo = True
+        silero_put_accent = True
 
     reader = get_pdf_reader(args.pdf)
     total_pages = len(reader.pages)
@@ -2515,6 +2577,10 @@ def main() -> int:
         silero_sentence_gap=args.silero_sentence_gap,
         pronounce=pronounce_map,
         normalize_numbers=normalize_numbers,
+        # Homographs/+stress only for Silero; say/piper ignore unused kwargs via synthesize_chunk.
+        homographs=homographs_map if args.engine == "silero" else None,
+        silero_put_yo=silero_put_yo,
+        silero_put_accent=silero_put_accent,
     )
 
     if args.mode == "chapters":

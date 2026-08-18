@@ -40,6 +40,14 @@ ii_spoken_as: "и и"
 # Pre-synth: numbers, dates, %, currency, № → Russian words (UI keeps digits).
 normalize_numbers: true
 
+# Silero-only: auto ё/stress flags (model defaults are already true) + optional +stress overrides.
+# Example: замок: "зам+ок"  (+ before the stressed vowel).
+silero:
+  put_yo: true
+  put_accent: true
+
+homographs: {}
+
 # Whole-token replacements applied only before TTS (UI/cues keep original spelling).
 pronounce:
   AI-DISRUPT: "эй ай дисрапт"
