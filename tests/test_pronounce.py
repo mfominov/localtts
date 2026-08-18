@@ -42,8 +42,35 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("дисрапт", spoken.casefold())
         self.assertIn("пи эс эл си", spoken.casefold())
         self.assertIn("пи ди эл си", spoken.casefold())
-        self.assertIn("эр оу ай", spoken.casefold())
+        self.assertIn("рои", spoken.casefold())
         self.assertIn("си ай оу", spoken.casefold())
+
+    def test_pronounce_ear_batch_brands(self) -> None:
+        text = (
+            "MTTR и runbooks, CSS-лидеров, GenAI и AIOps, "
+            "GPT-3.5 Qwen3 DeepSeek-V4, Dynatrace Davis AI-RCA, "
+            "DigitalOcean SquareOps L1 Forrester Komodor IDE IDC, "
+            "Hype Cycle и IT service desk, LLM-powered Zero-means-All, "
+            "ROI и data quality Confidence threshold."
+        )
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("эм ти ти ар", low)
+        self.assertIn("ранбукс", low)
+        self.assertIn("си эс эс", low)
+        self.assertIn("дженэй", low)
+        self.assertIn("эй ай опс", low)
+        self.assertIn("джи пи ти три точка пять", low)
+        self.assertIn("квен три", low)
+        self.assertIn("дипсик ви четыре", low)
+        self.assertIn("дайнатрейс", low)
+        self.assertIn("эй ай ар си эй", low)
+        self.assertIn("диджитал оушн", low)
+        self.assertIn("хайп сайкл", low)
+        self.assertIn("ай ти сервис деск", low)
+        self.assertIn("рои", low)
+        self.assertIn("дэйта", low)
+        self.assertIn("квалити", low)
 
     def test_pronounce_runtime_otel_rag_governance(self) -> None:
         text = (

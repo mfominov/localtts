@@ -589,8 +589,9 @@ def prepare_tts_spoken_text(
 
     spoken = expand_section_references(text)
     spoken = expand_section_ref_digits_to_words(spoken)
-    spoken = normalize_numbers_for_speech(spoken, enabled=normalize_numbers)
+    # Pronounce before NUM so tokens like GPT-3.5 / R0-R5 are not eaten as decimals.
     spoken = apply_pronounce_map(spoken, pronounce)
+    spoken = normalize_numbers_for_speech(spoken, enabled=normalize_numbers)
     # Homograph +stress markers are Silero-only; callers pass homographs only for silero.
     spoken = apply_pronounce_map(spoken, homographs)
     return spoken

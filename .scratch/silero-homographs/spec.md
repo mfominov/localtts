@@ -9,7 +9,7 @@ Expose Silero `put_yo` / `put_accent` in patterns and allow optional `+stress` h
 - v5_ru already defaults put_yo/put_accent to True — wire explicitly for config/docs
 - `silero:` section in `patterns/default.yml`
 - `homographs:` map surface → Silero form with `+` before stressed vowel (empty by default)
-- Order: § → NUM → pronounce → homographs
+- Order: § → pronounce → NUM → homographs
 - Homographs/+ markers only on Silero path (say/piper never see `+`)
 - Pre-synth only; UI/cues unchanged
 - No external ruaccent in this slice

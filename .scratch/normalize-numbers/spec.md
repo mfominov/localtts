@@ -10,7 +10,7 @@ Pre-synth Russian spoken forms for numbers so Silero does not misread digits, da
 - Module: `normalize_numbers.py`
 - Lib: `num2words` + thin wrappers
 - Config: `normalize_numbers: true` in `patterns/default.yml`
-- Order: §-digits → words → **NUM** → `pronounce:`
+- Order: §-digits → words → **pronounce:** → **NUM** (so `GPT-3.5` is not eaten as a decimal)
 - In scope: integers (incl. `1 500`), decimals (`,`/`.`), `%` inflection, `№`, `₽$€`, dates `ДД.ММ.ГГГГ` / `ДД.ММ.ГГ`
 - Out of scope v1: ranges `10–20`, math symbols, ordinals outside dates
 

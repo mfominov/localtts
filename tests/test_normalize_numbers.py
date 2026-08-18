@@ -49,17 +49,18 @@ class NormalizeNumbersTests(unittest.TestCase):
         self.assertEqual(normalize_numbers_for_speech("уровень R0"), "уровень R0")
         self.assertEqual(normalize_numbers_for_speech("R0-R5"), "R0-R5")
 
-    def test_prepare_tts_order_section_then_numbers_then_pronounce(self) -> None:
+    def test_prepare_tts_order_section_then_pronounce_then_numbers(self) -> None:
         patterns = ltts.load_cleaning_patterns(ltts.DEFAULT_PATTERNS_FILE)
-        text = "см. §3.2 и ROI 20%"
+        text = "см. §3.2 и ROI 20% и GPT-3.5"
         spoken = ltts.prepare_tts_spoken_text(
             text,
             patterns.pronounce,
             normalize_numbers=patterns.normalize_numbers,
         )
         self.assertIn("три точка два", spoken)
-        self.assertIn("эр оу ай", spoken.casefold())
+        self.assertIn("рои", spoken.casefold())
         self.assertIn("двадцать процентов", spoken)
+        self.assertIn("джи пи ти три точка пять", spoken.casefold())
         self.assertNotIn("20%", spoken)
         self.assertNotIn("§", spoken)
         # Must not turn §3.2 into a decimal fraction reading.
