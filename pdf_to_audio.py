@@ -230,6 +230,12 @@ class SpeechPauses:
 
 
 @dataclass
+class SpeechDialogue:
+    quote_before_ms: int = 280
+    quote_after_ms: int = 180
+
+
+@dataclass
 class CleaningPatterns:
     line_drop: list[re.Pattern[str]] = field(default_factory=list)
     inline_sub: list[tuple[re.Pattern[str], str]] = field(default_factory=list)
@@ -243,6 +249,7 @@ class CleaningPatterns:
     homographs: dict[str, str] = field(default_factory=dict)
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS
     speech_pauses: SpeechPauses = field(default_factory=SpeechPauses)
+    speech_dialogue: SpeechDialogue = field(default_factory=SpeechDialogue)
 
 
 def _compile_regex_flags(flags: Any) -> int:
@@ -338,6 +345,13 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         semicolon_ms=int(pauses_raw.get("semicolon_ms", 250)),
         colon_ms=int(pauses_raw.get("colon_ms", 250)),
     )
+    dialogue_raw = speech_raw.get("dialogue") or {}
+    if dialogue_raw and not isinstance(dialogue_raw, dict):
+        raise RuntimeError(f"Invalid speech.dialogue section in {patterns_path}")
+    speech_dialogue = SpeechDialogue(
+        quote_before_ms=int(dialogue_raw.get("quote_before_ms", 280)),
+        quote_after_ms=int(dialogue_raw.get("quote_after_ms", 180)),
+    )
 
     return CleaningPatterns(
         line_drop=line_drop,
@@ -352,6 +366,7 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         homographs=homographs,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
+        speech_dialogue=speech_dialogue,
     )
 
 
@@ -639,6 +654,57 @@ def stylize_quoted_speech(text: str) -> str:
     text = text.replace("«", " ").replace("»", " ")
     text = text.replace("“", " ").replace("”", " ")
     return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def split_quote_segments(text: str) -> list[tuple[str, bool]]:
+    """Split text into (segment, is_quote) pairs for Silero dialogue pauses.
+
+    Quote glyphs are removed from quote segments. Long quotes (>280 chars) are
+    still quoted for glyph stripping but callers may skip pauses.
+    """
+    if not text:
+        return []
+    candidates: list[tuple[int, int, str]] = []
+    for pattern in (
+        re.compile(r"«\s*(.+?)\s*»", re.DOTALL),
+        re.compile(r"“\s*(.+?)\s*”", re.DOTALL),
+        re.compile(r'"\s*([^"]{1,500})\s*"'),
+    ):
+        for match in pattern.finditer(text):
+            inner = re.sub(r"\s+", " ", match.group(1)).strip()
+            if not inner:
+                continue
+            candidates.append((match.start(), match.end(), inner))
+    candidates.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    chosen: list[tuple[int, int, str]] = []
+    last_end = -1
+    for start, end, inner in candidates:
+        if start < last_end:
+            continue
+        chosen.append((start, end, inner))
+        last_end = end
+
+    if not chosen:
+        cleaned = text.replace("«", " ").replace("»", " ").replace("“", " ").replace("”", " ")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return [(cleaned, False)] if cleaned else []
+
+    segments: list[tuple[str, bool]] = []
+    cursor = 0
+    for start, end, inner in chosen:
+        before = text[cursor:start]
+        before = before.replace("«", " ").replace("»", " ").replace("“", " ").replace("”", " ")
+        before = re.sub(r"\s+", " ", before).strip()
+        if before:
+            segments.append((before, False))
+        segments.append((inner, True))
+        cursor = end
+    after = text[cursor:]
+    after = after.replace("«", " ").replace("»", " ").replace("“", " ").replace("”", " ")
+    after = re.sub(r"\s+", " ", after).strip()
+    if after:
+        segments.append((after, False))
+    return segments
 
 
 def chunk_text(text: str, max_chars: int) -> list[str]:
@@ -1703,10 +1769,12 @@ def synthesize_with_silero(
     put_accent: bool = True,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
+    speech_dialogue: SpeechDialogue | None = None,
 ) -> list[dict[str, Any]]:
     import torch
 
     pauses = speech_pauses or SpeechPauses()
+    dialogue = speech_dialogue or SpeechDialogue()
     max_chars = max(1, int(silero_chunk_chars))
 
     spoken = prepare_silero_text(strip_speech_markup(text))
@@ -1730,50 +1798,63 @@ def synthesize_with_silero(
 
     with _silero_lock:
         for idx, sentence in enumerate(sentences):
-            clauses = split_speech_clauses(sentence) or [sentence]
+            segments = split_quote_segments(sentence) or [(sentence, False)]
             sentence_parts: list[Any] = []
-            for clause_idx, clause in enumerate(clauses):
-                for part in chunk_text(clause, max_chars=max_chars):
-                    part = prepare_silero_text(part)
-                    if not is_speakable_for_silero(part):
-                        skipped += 1
-                        print(
-                            f"Silero skip (not speakable) in {output_file.name}: {part!r}",
-                            flush=True,
+            for seg_text, is_quote in segments:
+                use_quote_pause = is_quote and len(seg_text) <= 280
+                if use_quote_pause:
+                    gap = silence_ms(dialogue.quote_before_ms)
+                    if gap is not None and gap.numel() > 0:
+                        sentence_parts.append(gap)
+                clauses = split_speech_clauses(seg_text) or [seg_text]
+                for clause_idx, clause in enumerate(clauses):
+                    for part in chunk_text(clause, max_chars=max_chars):
+                        part = prepare_silero_text(part)
+                        if not is_speakable_for_silero(part):
+                            skipped += 1
+                            print(
+                                f"Silero skip (not speakable) in {output_file.name}: {part!r}",
+                                flush=True,
+                            )
+                            continue
+                        tts_part = prepare_tts_spoken_text(
+                            part,
+                            pronounce,
+                            normalize_numbers=normalize_numbers,
+                            homographs=homographs,
                         )
-                        continue
-                    tts_part = prepare_tts_spoken_text(
-                        part,
-                        pronounce,
-                        normalize_numbers=normalize_numbers,
-                        homographs=homographs,
-                    )
-                    try:
-                        audio = model.apply_tts(
-                            text=tts_part,
-                            speaker=speaker,
-                            sample_rate=sample_rate,
-                            put_yo=put_yo,
-                            put_accent=put_accent,
+                        try:
+                            audio = model.apply_tts(
+                                text=tts_part,
+                                speaker=speaker,
+                                sample_rate=sample_rate,
+                                put_yo=put_yo,
+                                put_accent=put_accent,
+                            )
+                        except ValueError:
+                            skipped += 1
+                            print(
+                                f"Silero skip (ValueError) in {output_file.name}: {part!r}",
+                                flush=True,
+                            )
+                            continue
+                        if audio is None:
+                            skipped += 1
+                            print(
+                                f"Silero skip (empty audio) in {output_file.name}: {part!r}",
+                                flush=True,
+                            )
+                            continue
+                        sentence_parts.append(
+                            torch.as_tensor(audio).detach().cpu().float().reshape(-1)
                         )
-                    except ValueError:
-                        skipped += 1
-                        print(
-                            f"Silero skip (ValueError) in {output_file.name}: {part!r}",
-                            flush=True,
-                        )
-                        continue
-                    if audio is None:
-                        skipped += 1
-                        print(
-                            f"Silero skip (empty audio) in {output_file.name}: {part!r}",
-                            flush=True,
-                        )
-                        continue
-                    sentence_parts.append(torch.as_tensor(audio).detach().cpu().float().reshape(-1))
-                # Intra-sentence pause after comma/colon/… (inside the sentence cue).
-                if clause_idx < len(clauses) - 1:
-                    gap = silence_ms(pause_ms_after_text(clause, pauses))
+                    # Intra-sentence pause after comma/colon/… (inside the sentence cue).
+                    if clause_idx < len(clauses) - 1:
+                        gap = silence_ms(pause_ms_after_text(clause, pauses))
+                        if gap is not None and gap.numel() > 0:
+                            sentence_parts.append(gap)
+                if use_quote_pause:
+                    gap = silence_ms(dialogue.quote_after_ms)
                     if gap is not None and gap.numel() > 0:
                         sentence_parts.append(gap)
 
@@ -1839,6 +1920,7 @@ def synthesize_chunk(
     silero_put_accent: bool = True,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
+    speech_dialogue: SpeechDialogue | None = None,
 ) -> None:
     if engine == "piper":
         if piper_model is None:
@@ -1865,6 +1947,7 @@ def synthesize_chunk(
             put_accent=silero_put_accent,
             silero_chunk_chars=silero_chunk_chars,
             speech_pauses=speech_pauses,
+            speech_dialogue=speech_dialogue,
         )
         return
     synthesize_with_say(
@@ -1913,6 +1996,7 @@ def synthesize_job(
     silero_put_accent: bool = True,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
+    speech_dialogue: SpeechDialogue | None = None,
 ) -> tuple[int, pathlib.Path, float]:
     idx, output_file, text = job
     started = time.perf_counter()
@@ -1932,6 +2016,7 @@ def synthesize_job(
         silero_put_accent=silero_put_accent,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
+        speech_dialogue=speech_dialogue,
     )
     return idx, output_file, time.perf_counter() - started
 
@@ -1953,6 +2038,7 @@ def run_jobs(
     silero_put_accent: bool = True,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
+    speech_dialogue: SpeechDialogue | None = None,
 ) -> list[pathlib.Path]:
     if started_at is None:
         started_at = time.perf_counter()
@@ -1970,6 +2056,7 @@ def run_jobs(
         silero_put_accent=silero_put_accent,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
+        speech_dialogue=speech_dialogue,
     )
     if workers <= 1:
         result: list[pathlib.Path] = []
@@ -2010,6 +2097,7 @@ def run_jobs(
                 silero_put_accent,
                 silero_chunk_chars,
                 speech_pauses,
+                speech_dialogue,
             )
             for job in jobs
         ]
@@ -2562,6 +2650,7 @@ def main() -> int:
     silero_put_accent = True
     silero_chunk_chars = DEFAULT_SILERO_CHUNK_CHARS
     speech_pauses = SpeechPauses()
+    speech_dialogue = SpeechDialogue()
     speech_patterns = CleaningPatterns()
     try:
         speech_patterns = cleaning_patterns or load_cleaning_patterns(args.patterns_file)
@@ -2572,6 +2661,7 @@ def main() -> int:
         silero_put_accent = speech_patterns.silero_put_accent
         silero_chunk_chars = speech_patterns.silero_chunk_chars
         speech_pauses = speech_patterns.speech_pauses
+        speech_dialogue = speech_patterns.speech_dialogue
     except RuntimeError:
         pronounce_map = {}
         normalize_numbers = True
@@ -2580,6 +2670,7 @@ def main() -> int:
         silero_put_accent = True
         silero_chunk_chars = DEFAULT_SILERO_CHUNK_CHARS
         speech_pauses = SpeechPauses()
+        speech_dialogue = SpeechDialogue()
 
     reader = get_pdf_reader(args.pdf)
     total_pages = len(reader.pages)
@@ -2667,6 +2758,7 @@ def main() -> int:
         silero_put_accent=silero_put_accent,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
+        speech_dialogue=speech_dialogue,
     )
 
     if args.mode == "chapters":

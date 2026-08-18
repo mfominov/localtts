@@ -58,6 +58,9 @@ speech:
     comma_ms: 150
     semicolon_ms: 250
     colon_ms: 250
+  dialogue:
+    quote_before_ms: 280
+    quote_after_ms: 180
 
 # Whole-token replacements applied only before TTS (UI/cues keep original spelling).
 pronounce:

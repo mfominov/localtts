@@ -273,6 +273,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 - **Числа / даты / % / валюта / `№`** — `normalize_numbers: true` в patterns; модуль `normalize_numbers.py` (только перед TTS).
 - **Silero ё/ударения** — `silero.put_yo` / `silero.put_accent` (по умолчанию `true`). Омографы: `homographs:` с маркером `+` перед ударной гласной (`замок: "зам+ок"`); только для Silero.
 - **Паузы / chunk Silero** — секция `speech:` (`pauses.*_ms`, `silero_chunk_chars: 300`); тишина между клаузами, без CLI gap.
+- **Диалоги Silero** — `speech.dialogue.quote_before_ms` / `quote_after_ms` вокруг `«»`/`“”`/`"..."` (только тишина; say по-прежнему `[[slnc]]`/`[[pbas]]`).
 - **`§2.5.1`** — в текст уходит `в разделе 2 точка 5 точка 1`, перед TTS цифры словами (`два точка пять…`); в плеере снова `§2.5.1`.
 
 Пример переопределения:
@@ -291,6 +292,9 @@ speech:
   pauses:
     period_ms: 400
     comma_ms: 150
+  dialogue:
+    quote_before_ms: 280
+    quote_after_ms: 180
 pronounce:
   PSLC: "пи эс эл си"
   ROI: "эр оу ай"
