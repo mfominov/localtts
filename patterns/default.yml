@@ -48,6 +48,17 @@ silero:
 
 homographs: {}
 
+# Silero speech rhythm (pauses as silence samples; soft-limit for subchunks).
+speech:
+  silero_chunk_chars: 300
+  pauses:
+    period_ms: 400
+    exclamation_ms: 400
+    question_ms: 400
+    comma_ms: 150
+    semicolon_ms: 250
+    colon_ms: 250
+
 # Whole-token replacements applied only before TTS (UI/cues keep original spelling).
 pronounce:
   AI-DISRUPT: "эй ай дисрапт"

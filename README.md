@@ -65,9 +65,10 @@ FORCE=1 make listen-silero PDF=./doc.pdf \
 Модель по умолчанию — `v5_ru` (латиница в тексте ок; для вопросов — `SILERO_MODEL=v5_5_ru`).
 Не используйте `v5_2_ru` на документах с английскими словами — там падает обработка латиницы.
 
-Silero синтезирует **по предложениям** и пишет измеренные cues (`timing: measured` в `manifest.json`) —
-подсветка в плеере совпадает с реальной длиной фраз. Пауза между предложениями:
-`SILERO_SENTENCE_GAP=0.25` (секунды). У `say` / Piper cues по-прежнему оценочные (`speech_weight`).
+Silero синтезирует **по предложениям** (с паузами после `,.;:?!` из `speech.pauses` в patterns)
+и пишет измеренные cues (`timing: measured` в `manifest.json`). Soft-limit куска —
+`speech.silero_chunk_chars` (по умолчанию 300). У `say` / Piper cues по-прежнему оценочные
+(`speech_weight`).
 
 
 ## Браузерный плеер (текст + аудио)
@@ -271,6 +272,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 - **Бренды и аббревиатуры** (`PSLC`, `ROI`, …) — секция `pronounce:`; подставляются только перед TTS.
 - **Числа / даты / % / валюта / `№`** — `normalize_numbers: true` в patterns; модуль `normalize_numbers.py` (только перед TTS).
 - **Silero ё/ударения** — `silero.put_yo` / `silero.put_accent` (по умолчанию `true`). Омографы: `homographs:` с маркером `+` перед ударной гласной (`замок: "зам+ок"`); только для Silero.
+- **Паузы / chunk Silero** — секция `speech:` (`pauses.*_ms`, `silero_chunk_chars: 300`); тишина между клаузами, без CLI gap.
 - **`§2.5.1`** — в текст уходит `в разделе 2 точка 5 точка 1`, перед TTS цифры словами (`два точка пять…`); в плеере снова `§2.5.1`.
 
 Пример переопределения:
@@ -284,6 +286,11 @@ silero:
   put_accent: true
 homographs:
   замок: "зам+ок"
+speech:
+  silero_chunk_chars: 300
+  pauses:
+    period_ms: 400
+    comma_ms: 150
 pronounce:
   PSLC: "пи эс эл си"
   ROI: "эр оу ай"
