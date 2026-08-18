@@ -269,6 +269,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 
 - **`AI` / `ИИ`** — на этапе extract (`ai_spoken_as` / `ii_spoken_as`, по умолчанию `эй ай` / `и и`). В плеере снова показываются как `AI` / `ИИ`.
 - **Бренды и аббревиатуры** (`PSLC`, `ROI`, …) — секция `pronounce:`; подставляются только перед TTS.
+- **Числа / даты / % / валюта / `№`** — `normalize_numbers: true` в patterns; модуль `normalize_numbers.py` (только перед TTS).
 - **`§2.5.1`** — в текст уходит `в разделе 2 точка 5 точка 1`, перед TTS цифры словами (`два точка пять…`); в плеере снова `§2.5.1`.
 
 Пример переопределения:
@@ -276,6 +277,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 ```yaml
 ai_spoken_as: "эй-ай"
 ii_spoken_as: "и и"
+normalize_numbers: true
 pronounce:
   PSLC: "пи эс эл си"
   ROI: "эр оу ай"

@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pypdf>=4.0.0",
     "pyyaml>=6.0",
+    "num2words>=0.5.13",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,7 @@ audiobook = [
 ]
 
 [tool.setuptools]
-py-modules = ["pdf_to_audio"]
+py-modules = ["pdf_to_audio", "normalize_numbers"]
 
 [tool.ruff]
 target-version = "py311"

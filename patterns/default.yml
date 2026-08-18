@@ -37,6 +37,9 @@ inline_sub:
 ai_spoken_as: "эй ай"
 ii_spoken_as: "и и"
 
+# Pre-synth: numbers, dates, %, currency, № → Russian words (UI keeps digits).
+normalize_numbers: true
+
 # Whole-token replacements applied only before TTS (UI/cues keep original spelling).
 pronounce:
   AI-DISRUPT: "эй ай дисрапт"

@@ -236,6 +236,7 @@ class CleaningPatterns:
     pronounce: dict[str, str] = field(default_factory=dict)
     ai_spoken_as: str = "эй ай"
     ii_spoken_as: str = "и и"
+    normalize_numbers: bool = True
 
 
 def _compile_regex_flags(flags: Any) -> int:
@@ -301,6 +302,7 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
 
     ai_spoken_as = str(raw.get("ai_spoken_as") or "эй ай").strip() or "эй ай"
     ii_spoken_as = str(raw.get("ii_spoken_as") or "и и").strip() or "и и"
+    normalize_numbers = bool(raw.get("normalize_numbers", True))
 
     return CleaningPatterns(
         line_drop=line_drop,
@@ -309,6 +311,7 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         pronounce=pronounce,
         ai_spoken_as=ai_spoken_as,
         ii_spoken_as=ii_spoken_as,
+        normalize_numbers=normalize_numbers,
     )
 
 
@@ -519,9 +522,18 @@ def apply_pronounce_map(text: str, pronounce: dict[str, str] | None) -> str:
     return result
 
 
-def prepare_tts_spoken_text(text: str, pronounce: dict[str, str] | None = None) -> str:
+def prepare_tts_spoken_text(
+    text: str,
+    pronounce: dict[str, str] | None = None,
+    *,
+    normalize_numbers: bool = True,
+) -> str:
     """TTS-only transforms; do not use for UI/cues storage."""
-    spoken = expand_section_ref_digits_to_words(text)
+    from normalize_numbers import normalize_numbers_for_speech
+
+    spoken = expand_section_references(text)
+    spoken = expand_section_ref_digits_to_words(spoken)
+    spoken = normalize_numbers_for_speech(spoken, enabled=normalize_numbers)
     spoken = apply_pronounce_map(spoken, pronounce)
     return spoken
 
@@ -1489,8 +1501,9 @@ def synthesize_with_say(
     output_file: pathlib.Path,
     *,
     pronounce: dict[str, str] | None = None,
+    normalize_numbers: bool = True,
 ) -> None:
-    spoken = prepare_tts_spoken_text(text, pronounce)
+    spoken = prepare_tts_spoken_text(text, pronounce, normalize_numbers=normalize_numbers)
     text_file = output_file.with_suffix(".txt")
     text_file.write_text(spoken, encoding="utf-8")
     try:
@@ -1508,6 +1521,7 @@ def synthesize_with_piper(
     output_file: pathlib.Path,
     *,
     pronounce: dict[str, str] | None = None,
+    normalize_numbers: bool = True,
 ) -> None:
     if not model.exists():
         raise RuntimeError(f"Piper model not found: {model}. Run: make install-piper")
@@ -1515,7 +1529,9 @@ def synthesize_with_piper(
     if not config.exists():
         raise RuntimeError(f"Piper model config not found: {config}")
 
-    spoken = prepare_tts_spoken_text(strip_speech_markup(text), pronounce)
+    spoken = prepare_tts_spoken_text(
+        strip_speech_markup(text), pronounce, normalize_numbers=normalize_numbers
+    )
     wav_file = output_file.with_suffix(".wav")
     piper_bin = resolve_piper_binary()
     process = subprocess.run(
@@ -1602,6 +1618,7 @@ def synthesize_with_silero(
     sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     *,
     pronounce: dict[str, str] | None = None,
+    normalize_numbers: bool = True,
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -1635,7 +1652,9 @@ def synthesize_with_silero(
                         flush=True,
                     )
                     continue
-                tts_part = prepare_tts_spoken_text(part, pronounce)
+                tts_part = prepare_tts_spoken_text(
+                    part, pronounce, normalize_numbers=normalize_numbers
+                )
                 try:
                     audio = model.apply_tts(text=tts_part, speaker=speaker, sample_rate=sample_rate)
                 except ValueError:
@@ -1708,11 +1727,18 @@ def synthesize_chunk(
     silero_sample_rate: int = 24000,
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     pronounce: dict[str, str] | None = None,
+    normalize_numbers: bool = True,
 ) -> None:
     if engine == "piper":
         if piper_model is None:
             raise RuntimeError("Piper model path is required for engine=piper")
-        synthesize_with_piper(piper_model, text, output_file, pronounce=pronounce)
+        synthesize_with_piper(
+            piper_model,
+            text,
+            output_file,
+            pronounce=pronounce,
+            normalize_numbers=normalize_numbers,
+        )
         return
     if engine == "silero":
         synthesize_with_silero(
@@ -1723,9 +1749,12 @@ def synthesize_chunk(
             output_file,
             sentence_gap=silero_sentence_gap,
             pronounce=pronounce,
+            normalize_numbers=normalize_numbers,
         )
         return
-    synthesize_with_say(voice, text, output_file, pronounce=pronounce)
+    synthesize_with_say(
+        voice, text, output_file, pronounce=pronounce, normalize_numbers=normalize_numbers
+    )
 
 
 def format_duration(seconds: float) -> str:
@@ -1764,6 +1793,7 @@ def synthesize_job(
     silero_sample_rate: int,
     silero_sentence_gap: float,
     pronounce: dict[str, str] | None = None,
+    normalize_numbers: bool = True,
 ) -> tuple[int, pathlib.Path, float]:
     idx, output_file, text = job
     started = time.perf_counter()
@@ -1778,6 +1808,7 @@ def synthesize_job(
         silero_sample_rate=silero_sample_rate,
         silero_sentence_gap=silero_sentence_gap,
         pronounce=pronounce,
+        normalize_numbers=normalize_numbers,
     )
     return idx, output_file, time.perf_counter() - started
 
@@ -1794,6 +1825,7 @@ def run_jobs(
     silero_sentence_gap: float = DEFAULT_SILERO_SENTENCE_GAP,
     started_at: float | None = None,
     pronounce: dict[str, str] | None = None,
+    normalize_numbers: bool = True,
 ) -> list[pathlib.Path]:
     if started_at is None:
         started_at = time.perf_counter()
@@ -1806,6 +1838,7 @@ def run_jobs(
         silero_sample_rate=silero_sample_rate,
         silero_sentence_gap=silero_sentence_gap,
         pronounce=pronounce,
+        normalize_numbers=normalize_numbers,
     )
     if workers <= 1:
         result: list[pathlib.Path] = []
@@ -1841,6 +1874,7 @@ def run_jobs(
                 silero_sample_rate,
                 silero_sentence_gap,
                 pronounce,
+                normalize_numbers,
             )
             for job in jobs
         ]
@@ -2390,12 +2424,15 @@ def main() -> int:
             return 1
 
     pronounce_map: dict[str, str] = {}
+    normalize_numbers = True
     speech_patterns = CleaningPatterns()
     try:
         speech_patterns = cleaning_patterns or load_cleaning_patterns(args.patterns_file)
         pronounce_map = dict(speech_patterns.pronounce)
+        normalize_numbers = speech_patterns.normalize_numbers
     except RuntimeError:
         pronounce_map = {}
+        normalize_numbers = True
 
     reader = get_pdf_reader(args.pdf)
     total_pages = len(reader.pages)
@@ -2477,6 +2514,7 @@ def main() -> int:
         silero_sample_rate=args.silero_sample_rate,
         silero_sentence_gap=args.silero_sentence_gap,
         pronounce=pronounce_map,
+        normalize_numbers=normalize_numbers,
     )
 
     if args.mode == "chapters":
