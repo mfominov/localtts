@@ -11,12 +11,14 @@
 - First slice: **NUM v1** — done (`normalize_numbers.py`).
 - Next slice: **RU v1** — done (`.scratch/silero-homographs/spec.md`).
 - Then: **pauses/chunk B** — done (`.scratch/silero-pauses/spec.md`); **C dialogue** — done (`.scratch/silero-dialogue/spec.md`).
+- **Status (2026-08-18):** OpenSpec cherry-pick **paused**. Further work = ear-driven `pronounce:` / `homographs:` only.
+- **Preferred next if backlog reopens:** repeatability-based headers/footers.
 - Near-term **non-goals:** Speech IR, OCR, tables, LUFS/reverb, full SSML adapter, full ABBR expansions.
 
 ### Backlog (from OpenSpec, unscheduled)
 
+- Repeatability-based headers/footers ← preferred next
 - OCR fallback + garbage filter
-- Repeatability-based headers/footers
 - `chapters.json` IR
 - Table narration
 - Full abbreviation expansion + context tiers
