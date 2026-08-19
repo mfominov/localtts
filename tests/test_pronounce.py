@@ -138,6 +138,42 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("джейсон эл", low)
         self.assertIn("икс четыре ноль два", low)
 
+    def test_pronounce_chatgpt_batch3(self) -> None:
+        text = "FAA NTSB ChatGPT PaaS CAPEX OPEX GCP IBM NPS PII Qwen3-14B R1-R2"
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("эф эй эй", low)
+        self.assertIn("эн ти эс би", low)
+        self.assertIn("чат джи пи ти", low)
+        self.assertIn("пас", low)
+        self.assertIn("капекс", low)
+        self.assertIn("опекс", low)
+        self.assertIn("джи си пи", low)
+        self.assertIn("ай би эм", low)
+        self.assertIn("эн пи эс", low)
+        self.assertIn("пи ай ай", low)
+        self.assertIn("квен три четырнадцать би", low)
+        self.assertIn("эр один эр два", low)
+
+    def test_pronounce_chatgpt_batch4(self) -> None:
+        text = "GDPR GPT-4 MFA mTLS SBOM CVE CWE B2B P0 P95 S3 VLAN ZT M1.5"
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("джи ди пи ар", low)
+        self.assertIn("джи пи ти четыре", low)
+        self.assertIn("эм эф эй", low)
+        self.assertIn("эм ти эл эс", low)
+        self.assertIn("эс бом", low)
+        self.assertIn("си ви и", low)
+        self.assertIn("си дабл-ю и", low)
+        self.assertIn("би ту би", low)
+        self.assertIn("пи ноль", low)
+        self.assertIn("пи девяносто пять", low)
+        self.assertIn("эс три", low)
+        self.assertIn("ви лан", low)
+        self.assertIn("зи ти", low)
+        self.assertIn("эм один точка пять", low)
+
     def test_pslc_footer_inline_stripped(self) -> None:
         raw = (
             "Потолки отчитываются от единственного канона; любое "
