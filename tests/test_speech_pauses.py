@@ -15,6 +15,21 @@ class SpeechPausesTests(unittest.TestCase):
             ["Привет,", "мир;", "ок:", "да.", "Нет!"],
         )
 
+    def test_split_spaced_dash_not_hyphen(self) -> None:
+        self.assertEqual(
+            ltts.split_speech_clauses("PSLC AI-Disrupt PSLC - архитектура"),
+            ["PSLC AI-Disrupt PSLC—", "архитектура"],
+        )
+        self.assertEqual(
+            ltts.split_speech_clauses("Часть 1 — точка ROI"),
+            ["Часть 1—", "точка ROI"],
+        )
+        # In-token hyphen must stay one clause
+        self.assertEqual(
+            ltts.split_speech_clauses("AI-Disrupt и GenAI"),
+            ["AI-Disrupt и GenAI"],
+        )
+
     def test_pause_ms_mapping(self) -> None:
         pauses = ltts.SpeechPauses()
         self.assertEqual(ltts.pause_ms_after_text("да,", pauses), 150)
@@ -23,6 +38,7 @@ class SpeechPausesTests(unittest.TestCase):
         self.assertEqual(ltts.pause_ms_after_text("да!", pauses), 400)
         self.assertEqual(ltts.pause_ms_after_text("да;", pauses), 250)
         self.assertEqual(ltts.pause_ms_after_text("да:", pauses), 250)
+        self.assertEqual(ltts.pause_ms_after_text("PSLC—", pauses), 400)
         self.assertEqual(ltts.pause_ms_after_text("без знака", pauses), 0)
 
     def test_patterns_load_speech_section(self) -> None:
@@ -30,6 +46,7 @@ class SpeechPausesTests(unittest.TestCase):
         self.assertEqual(patterns.silero_chunk_chars, 300)
         self.assertEqual(patterns.speech_pauses.period_ms, 400)
         self.assertEqual(patterns.speech_pauses.comma_ms, 150)
+        self.assertEqual(patterns.speech_pauses.dash_ms, 400)
 
     def test_chunk_limit_default(self) -> None:
         self.assertEqual(ltts.DEFAULT_SILERO_CHUNK_CHARS, 300)

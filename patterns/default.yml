@@ -58,6 +58,8 @@ speech:
     comma_ms: 150
     semicolon_ms: 250
     colon_ms: 250
+    # Spaced dash/тире (title - subtitle); not hyphen inside AI-Disrupt
+    dash_ms: 400
   dialogue:
     quote_before_ms: 280
     quote_after_ms: 180

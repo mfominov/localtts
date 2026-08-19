@@ -227,6 +227,7 @@ class SpeechPauses:
     comma_ms: int = 150
     semicolon_ms: int = 250
     colon_ms: int = 250
+    dash_ms: int = 400
 
 
 @dataclass
@@ -344,6 +345,7 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         comma_ms=int(pauses_raw.get("comma_ms", 150)),
         semicolon_ms=int(pauses_raw.get("semicolon_ms", 250)),
         colon_ms=int(pauses_raw.get("colon_ms", 250)),
+        dash_ms=int(pauses_raw.get("dash_ms", 400)),
     )
     dialogue_raw = speech_raw.get("dialogue") or {}
     if dialogue_raw and not isinstance(dialogue_raw, dict):
@@ -1352,15 +1354,21 @@ def split_sentences(text: str) -> list[str]:
 
 
 def split_speech_clauses(text: str) -> list[str]:
-    """Split on ,.!?;: keeping the trailing punctuation on each clause."""
+    """Split on ,.!?;:— keeping the trailing punctuation on each clause.
+
+    Spaced dashes (` - `, ` — `, ` – `) become a clause break (title — subtitle).
+    Hyphens inside tokens (`AI-Disrupt`) are left alone.
+    """
     text = text.strip()
     if not text:
         return []
+    # Promote spaced dash/hyphen to a clause-ending em dash on the left side.
+    text = re.sub(r"(?<=\S)\s*[-–—]\s+(?=\S)", "—", text)
     clauses: list[str] = []
     buf: list[str] = []
     for ch in text:
         buf.append(ch)
-        if ch in ".!?,;:":
+        if ch in ".!?,;:—":
             clause = "".join(buf).strip()
             if clause:
                 clauses.append(clause)
@@ -1384,6 +1392,9 @@ def pause_ms_after_text(text: str, pauses: SpeechPauses) -> int:
         ",": pauses.comma_ms,
         ";": pauses.semicolon_ms,
         ":": pauses.colon_ms,
+        "—": pauses.dash_ms,
+        "–": pauses.dash_ms,
+        "-": pauses.dash_ms,
     }
     return max(0, int(mapping.get(mark, 0)))
 
