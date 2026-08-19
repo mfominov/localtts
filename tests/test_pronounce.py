@@ -95,6 +95,49 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("полиси эс код", low)
         self.assertIn("гардрейлс", low)
 
+    def test_pronounce_chatgpt_batch(self) -> None:
+        text = (
+            "HITL и HOOTL, MCP A2A, CSAT MTTA MTTD, "
+            "R3+ R4+ R3-R4, SaaS DORA ITOps ITIL, "
+            "CMDB SLI C.O.R.E IT+OT SPVM"
+        )
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("эйч ай ти эл", low)
+        self.assertIn("эйч оу оу ти эл", low)
+        self.assertIn("эм си пи", low)
+        self.assertIn("эй ту эй", low)
+        self.assertIn("си сат", low)
+        self.assertIn("эм ти ти эй", low)
+        self.assertIn("эр три плюс", low)
+        self.assertIn("сас", low)
+        self.assertIn("дора", low)
+        self.assertIn("айтил", low)
+        self.assertIn("си эм ди би", low)
+        self.assertIn("си оу ар и", low)
+        self.assertIn("ай ти плюс оу ти", low)
+        self.assertIn("эс пи ви эм", low)
+
+    def test_pronounce_chatgpt_batch2(self) -> None:
+        text = "SDD ADLC OWASP SIEM SOAR SDLC, GPT-5.6 vLLM OpenSSF MITRE, R2+ L4+ AG-UI JSONL x402"
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("эс ди ди", low)
+        self.assertIn("эй ди эл си", low)
+        self.assertIn("оу васп", low)
+        self.assertIn("сим", low)
+        self.assertIn("соар", low)
+        self.assertIn("эс ди эл си", low)
+        self.assertIn("джи пи ти пять точка шесть", low)
+        self.assertIn("ви эл эл эм", low)
+        self.assertIn("оупен эс эс эф", low)
+        self.assertIn("майтер", low)
+        self.assertIn("эр два плюс", low)
+        self.assertIn("эл четыре плюс", low)
+        self.assertIn("эй джи ю ай", low)
+        self.assertIn("джейсон эл", low)
+        self.assertIn("икс четыре ноль два", low)
+
     def test_pslc_footer_inline_stripped(self) -> None:
         raw = (
             "Потолки отчитываются от единственного канона; любое "
