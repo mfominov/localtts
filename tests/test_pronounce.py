@@ -174,6 +174,28 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("зи ти", low)
         self.assertIn("эм один точка пять", low)
 
+    def test_pronounce_valueerror_batch(self) -> None:
+        text = (
+            "ServiceNow Datadog Terraform Anthropic Gemini FinOps "
+            "context engineering prompt injection Autonomy Architect "
+            "Yandex Cloud YandexGPT GigaChat Qwen"
+        )
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("сервис нау", low)
+        self.assertIn("дэйтадог", low)
+        self.assertIn("терраформ", low)
+        self.assertIn("антропик", low)
+        self.assertIn("джемини", low)
+        self.assertIn("финопс", low)
+        self.assertIn("контекст инжиниринг", low)
+        self.assertIn("промпт инджекшн", low)
+        self.assertIn("отономи архитэкт", low)
+        self.assertIn("яндекс клауд", low)
+        self.assertIn("яндекс джи пи ти", low)
+        self.assertIn("гигачат", low)
+        self.assertIn("квен", low)
+
     def test_pslc_footer_inline_stripped(self) -> None:
         raw = (
             "Потолки отчитываются от единственного канона; любое "
