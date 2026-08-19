@@ -54,6 +54,25 @@ _NUMERO_RE = re.compile(
     r"(?![A-Za-zА-Яа-яЁё0-9])"
 )
 
+# ≥ 0,90 / <=1.5 — before bare decimals/integers.
+_COMPARE_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9])"
+    r"(?P<op>≥|≤|≠|>=|<=)"
+    r"\s*"
+    r"(?P<num>\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)"
+    r"(?![A-Za-zА-Яа-яЁё0-9])"
+)
+
+# к 2028 году / в 2028 году / с 2024 года — before bare year integers.
+_YEAR_PREP_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9])"
+    r"(?P<pre>ко|к|во|в|до|после|со|с|от)\s+"
+    r"(?P<year>19\d{2}|20\d{2})\s+"
+    r"(?P<noun>году|года|годом|год)"
+    r"(?![A-Za-zА-Яа-яЁё0-9])",
+    flags=re.IGNORECASE,
+)
+
 _DECIMAL_RE = re.compile(
     r"(?<![A-Za-zА-Яа-яЁё0-9.])"
     r"(?P<num>\d{1,3}(?:[ \u00a0]\d{3})*[.,]\d+|\d+[.,]\d+)"
@@ -67,6 +86,34 @@ _INTEGER_RE = re.compile(
 )
 
 _SYM_TO_CURRENCY = {"$": "USD", "€": "EUR", "₽": "RUB"}
+
+_COMPARE_WORDS = {
+    "≥": "больше или равно",
+    ">=": "больше или равно",
+    "≤": "меньше или равно",
+    "<=": "меньше или равно",
+    "≠": "не равно",
+}
+
+# Preposition → num2words ordinal case; spoken noun follows the case.
+_YEAR_PREP_CASE = {
+    "к": "d",
+    "ко": "d",
+    "в": "p",
+    "во": "p",
+    "до": "g",
+    "после": "g",
+    "с": "g",
+    "со": "g",
+    "от": "g",
+}
+
+_YEAR_CASE_NOUN = {
+    "d": "году",
+    "p": "году",
+    "g": "года",
+    "n": "год",
+}
 
 
 def _num2words():
@@ -163,6 +210,24 @@ def _speak_numero(raw: str) -> str:
     return f"номер {_cardinal(int(amount))}"
 
 
+def _speak_compare(op: str, raw: str) -> str:
+    words = _COMPARE_WORDS[op]
+    return f"{words} {_cardinal(_parse_number_token(raw))}"
+
+
+def _speak_year_prep(pre: str, year: int, _noun: str) -> str | None:
+    case = _YEAR_PREP_CASE.get(pre.casefold())
+    if not case:
+        return None
+    year = _normalize_year(year)
+    if not (1900 <= year <= 2100):
+        return None
+    _, converter = _num2words()
+    year_words = converter.to_ordinal(year, case=case)
+    noun = _YEAR_CASE_NOUN[case]
+    return f"{pre} {year_words} {noun}"
+
+
 def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
     """Replace numbers/dates/%/currency/№ with Russian spoken forms."""
     if not enabled or not text:
@@ -197,6 +262,16 @@ def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
         except (InvalidOperation, ValueError):
             return match.group(0)
 
+    def sub_compare(match: re.Match[str]) -> str:
+        try:
+            return park(_speak_compare(match.group("op"), match.group("num")))
+        except (InvalidOperation, ValueError, KeyError):
+            return match.group(0)
+
+    def sub_year_prep(match: re.Match[str]) -> str:
+        spoken = _speak_year_prep(match.group("pre"), int(match.group("year")), match.group("noun"))
+        return park(spoken) if spoken else match.group(0)
+
     def sub_decimal(match: re.Match[str]) -> str:
         try:
             return park(_cardinal(_parse_number_token(match.group("num"))))
@@ -215,6 +290,8 @@ def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
     result = _CURRENCY_SUFFIX_RE.sub(sub_currency, result)
     result = _PERCENT_RE.sub(sub_percent, result)
     result = _NUMERO_RE.sub(sub_numero, result)
+    result = _COMPARE_RE.sub(sub_compare, result)
+    result = _YEAR_PREP_RE.sub(sub_year_prep, result)
     result = _DECIMAL_RE.sub(sub_decimal, result)
     result = _INTEGER_RE.sub(sub_integer, result)
 

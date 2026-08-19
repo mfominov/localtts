@@ -49,6 +49,27 @@ class NormalizeNumbersTests(unittest.TestCase):
         self.assertEqual(normalize_numbers_for_speech("уровень R0"), "уровень R0")
         self.assertEqual(normalize_numbers_for_speech("R0-R5"), "R0-R5")
 
+    def test_compare_ge_le(self) -> None:
+        self.assertEqual(
+            normalize_numbers_for_speech("порог ≥ 0,90"),
+            "порог больше или равно ноль целых девять десятых",
+        )
+        self.assertEqual(
+            normalize_numbers_for_speech("SLA <= 1,5"),
+            "SLA меньше или равно одна целая пять десятых",
+        )
+        self.assertIn("больше или равно", normalize_numbers_for_speech("score >= 75"))
+
+    def test_year_prep_case(self) -> None:
+        k = normalize_numbers_for_speech("к 2028 году")
+        self.assertEqual(k, "к две тысячи двадцать восьмому году")
+        v = normalize_numbers_for_speech("в 2026 году")
+        self.assertEqual(v, "в две тысячи двадцать шестом году")
+        s = normalize_numbers_for_speech("с 2024 года")
+        self.assertEqual(s, "с две тысячи двадцать четвёртого года")
+        # Bare year still cardinal (no prep+год).
+        self.assertIn("две тысячи", normalize_numbers_for_speech("год 2028"))
+
     def test_prepare_tts_order_section_then_pronounce_then_numbers(self) -> None:
         patterns = ltts.load_cleaning_patterns(ltts.DEFAULT_PATTERNS_FILE)
         text = "см. §3.2 и ROI 20% и GPT-3.5"
