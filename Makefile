@@ -2,10 +2,13 @@ PYTHON ?= /opt/homebrew/bin/python3.11
 VENV ?= .venv
 BIN := $(VENV)/bin
 SCRIPT := pdf_to_audio.py
+PRONOUNCE_CANDIDATES := pronounce_candidates.py
 PLAYER_SRC := web/player.html
 FAVICON_SRC := web/favicon.svg
 
 PDF ?=
+TEXT ?=
+MIN_COUNT ?= 2
 OUT_DIR ?= output_audio
 VOICE ?= Milena
 ENGINE ?= say
@@ -33,7 +36,7 @@ BITRATE ?= 96k
 PIPER_MODEL_URL ?= https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx
 PIPER_CONFIG_URL ?= https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json
 
-.PHONY: help venv install install-piper install-silero install-audiobook run run-chapters run-chapters-say run-chapters-piper run-chapters-silero play listen listen-say listen-piper listen-silero serve refresh-web export-audiobook draft-chapters voices clean clean-audio
+.PHONY: help venv install install-piper install-silero install-audiobook run run-chapters run-chapters-say run-chapters-piper run-chapters-silero play listen listen-say listen-piper listen-silero serve refresh-web export-audiobook draft-chapters pronounce-candidates voices clean clean-audio
 
 help:
 	@echo "Targets:"
@@ -50,6 +53,7 @@ help:
 	@echo "  make listen-piper PDF=/path        - Piper chapters + open player"
 	@echo "  make listen-silero PDF=/path       - Silero chapters + open player"
 	@echo "  make draft-chapters PDF=/path      - draft {pdf}.chapters.txt from outline/TOC"
+	@echo "  make pronounce-candidates PDF=/path|TEXT=/path - Latin tokens for ChatGPT→pronounce YAML"
 	@echo "  make serve            - only open browser player for existing OUT_DIR"
 	@echo "  make play             - play OUT_DIR/playlist.m3u in VLC"
 	@echo "  make refresh-web      - update player + section markers without re-TTS"
@@ -69,6 +73,7 @@ help:
 	@echo "  SILERO_SAMPLE_RATE=$(SILERO_SAMPLE_RATE)"
 	@echo "  MAX_CHARS=$(MAX_CHARS) START_PAGE=$(START_PAGE) END_PAGE=$(END_PAGE)"
 	@echo "  CHAPTER_PAGES=$(CHAPTER_PAGES) CHAPTERS_FILE=$(CHAPTERS_FILE) PATTERNS_FILE=$(PATTERNS_FILE)"
+	@echo "  TEXT=$(TEXT) MIN_COUNT=$(MIN_COUNT)"
 	@echo "  JOBS=$(JOBS) KEEP=$(KEEP) FORCE=$(FORCE) PORT=$(PORT)"
 	@echo "  COVER=$(COVER) COVER_PAGE=$(COVER_PAGE) BOOK_TITLE=$(BOOK_TITLE) BOOK_AUTHOR=$(BOOK_AUTHOR) BITRATE=$(BITRATE)"
 
@@ -252,6 +257,33 @@ draft-chapters:
 		--start-page "$(START_PAGE)" \
 		--end-page "$(END_PAGE)" \
 		--patterns-file "$(PATTERNS_FILE)"
+
+pronounce-candidates:
+	@if [ -z "$(PDF)" ] && [ -z "$(TEXT)" ]; then \
+		echo "Usage: make pronounce-candidates PDF=/path/to/file.pdf"; \
+		echo "   or: make pronounce-candidates TEXT=/path/to/pre-pronounce.txt"; \
+		exit 1; \
+	fi
+	@if [ -n "$(PDF)" ] && [ -n "$(TEXT)" ]; then \
+		echo "Use either PDF= or TEXT=, not both"; \
+		exit 1; \
+	fi
+	@if [ -x "$(BIN)/python" ]; then \
+		PY="$(BIN)/python"; \
+	else \
+		PY="$(PYTHON)"; \
+	fi; \
+	if [ -n "$(PDF)" ]; then \
+		$$PY $(PRONOUNCE_CANDIDATES) --pdf "$(PDF)" \
+			--patterns-file "$(PATTERNS_FILE)" \
+			--min-count "$(MIN_COUNT)" \
+			--start-page "$(START_PAGE)" \
+			--end-page "$(END_PAGE)"; \
+	else \
+		$$PY $(PRONOUNCE_CANDIDATES) --text "$(TEXT)" \
+			--patterns-file "$(PATTERNS_FILE)" \
+			--min-count "$(MIN_COUNT)"; \
+	fi
 
 refresh-web:
 	@if [ -x "$(BIN)/python" ]; then \

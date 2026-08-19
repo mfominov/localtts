@@ -270,6 +270,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 
 - **`AI` / `ИИ`** — на этапе extract (`ai_spoken_as` / `ii_spoken_as`, по умолчанию `эй ай` / `и и`). В плеере снова показываются как `AI` / `ИИ`.
 - **Бренды и аббревиатуры** (`PSLC`, `ROI`, …) — секция `pronounce:`; подставляются только перед TTS.
+- **Новые кандидаты для словаря** — `make pronounce-candidates PDF=./doc.pdf` (или `TEXT=…`): список латиницы (частота ≥2, минус уже есть в `pronounce:`), YAML-скелет и промпт для ChatGPT. Без API; вмержи в `patterns/default.yml` вручную. Не бери `OUT_DIR/*.txt` после TTS — там уже spoken.
 - **Числа / даты / % / валюта / `№`** — `normalize_numbers: true` в patterns; модуль `normalize_numbers.py` (только перед TTS).
 - **Silero ё/ударения** — `silero.put_yo` / `silero.put_accent` (по умолчанию `true`). Омографы: `homographs:` с маркером `+` перед ударной гласной (`замок: "зам+ок"`); только для Silero.
 - **Паузы / chunk Silero** — секция `speech:` (`pauses.*_ms`, `silero_chunk_chars: 300`); тишина между клаузами, без CLI gap.
