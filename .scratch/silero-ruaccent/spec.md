@@ -19,6 +19,7 @@ Implemented 2026-08-20 (`go stress`). Opt-out: `silero.ruaccent: false`.
 - Ручные `homographs:` побеждают; те же пары передавать в `custom_dict` ruaccent
 - Silero `put_accent` / `put_yo` остаются `true` (страховка вместе с pre-marked `+`)
 - Load accentizer once per process; модели с HF при первом `load`, дальше кэш
+- Chunk long unpunctuated clauses (~1200 chars) before `process_all`; on ONNX errors skip chunk + reload session (JOBS>1 must not crash the run)
 - Бюджет: до **+30%** wall time на главу (Mac CPU) — замерить на приёмке
 - Старт кода: явная команда maintainer **`go stress`** (не число N глав)
 

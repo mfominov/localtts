@@ -62,7 +62,30 @@ skip_toc:
             mocked.assert_not_called()
             self.assertIn("замок", spoken)
 
-    def test_apply_ruaccent_passes_custom_dict_to_loader(self) -> None:
+    def test_chunk_long_text_for_ruaccent(self) -> None:
+        parts = ltts._chunk_text_for_ruaccent("слово " * 500, max_chars=100)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(p) <= 100 or " " not in p for p in parts))
+
+    def test_long_unpunctuated_ruaccent_does_not_crash(self) -> None:
+        # ~2.5k+ chars without periods used to blow BERT (2048); chunking must keep it alive.
+        text = "замок мука дверь окно стол книга " * 100
+        out = ltts.apply_ruaccent(text)
+        self.assertIsInstance(out, str)
+        self.assertGreater(len(out), 100)
+
+    def test_ruaccent_onnx_failure_falls_back(self) -> None:
+        accentizer = mock.Mock()
+        accentizer.process_all.side_effect = RuntimeError("onnx boom")
+
+        with mock.patch.object(ltts, "_get_ruaccentizer", return_value=accentizer):
+            # Reset any live singleton so reload stays on the mock.
+            ltts._ruaccentizer = None
+            ltts._ruaccentizer_key = None
+            out = ltts.apply_ruaccent("короткий текст")
+        self.assertEqual(out, "короткий текст")
+        accentizer.process_all.assert_called()
+
         accentizer = mock.Mock()
         accentizer.process_all.return_value = "зам+ок"
 

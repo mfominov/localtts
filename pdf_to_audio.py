@@ -30,6 +30,8 @@ from typing import Any
 SILERO_MAX_CHARS = 300
 DEFAULT_SILERO_CHUNK_CHARS = 300
 DEFAULT_RUACCENT_MODEL = "turbo3.1"
+# stress_usage BERT max is 2048 tokens; long unpunctuated clauses blow up ONNX.
+_RUACCENT_MAX_CHUNK_CHARS = 1200
 DEFAULT_PATTERNS_FILE = pathlib.Path(__file__).resolve().parent / "patterns" / "default.yml"
 _silero_lock = threading.Lock()
 _ruaccent_lock = threading.Lock()
@@ -820,30 +822,71 @@ def apply_homograph_overrides(text: str, homographs: dict[str, str] | None) -> s
 
 
 def _get_ruaccentizer(model_size: str, custom_dict: dict[str, str] | None) -> Any:
-    """Load RUAccent once per (model, custom_dict) key for the process."""
+    """Load RUAccent once per (model, custom_dict) key for the process.
+
+    Caller must hold `_ruaccent_lock`.
+    """
     global _ruaccentizer, _ruaccentizer_key
 
     mapping = dict(custom_dict or {})
     key = (model_size, tuple(sorted(mapping.items())))
-    with _ruaccent_lock:
-        if _ruaccentizer is not None and _ruaccentizer_key == key:
-            return _ruaccentizer
-        try:
-            from ruaccent import RUAccent
-        except ImportError as exc:
-            raise RuntimeError(
-                "ruaccent is required for Silero stress. Install with: pip install -e ."
-            ) from exc
-        accentizer = RUAccent()
-        accentizer.load(
-            omograph_model_size=model_size,
-            use_dictionary=True,
-            custom_dict=mapping,
-            tiny_mode=False,
-        )
-        _ruaccentizer = accentizer
-        _ruaccentizer_key = key
+    if _ruaccentizer is not None and _ruaccentizer_key == key:
         return _ruaccentizer
+    try:
+        from ruaccent import RUAccent
+    except ImportError as exc:
+        raise RuntimeError(
+            "ruaccent is required for Silero stress. Install with: pip install -e ."
+        ) from exc
+    accentizer = RUAccent()
+    accentizer.load(
+        omograph_model_size=model_size,
+        use_dictionary=True,
+        custom_dict=mapping,
+        tiny_mode=False,
+    )
+    _ruaccentizer = accentizer
+    _ruaccentizer_key = key
+    return _ruaccentizer
+
+
+def _chunk_text_for_ruaccent(text: str, max_chars: int = _RUACCENT_MAX_CHUNK_CHARS) -> list[str]:
+    """Split long clauses so ruaccent BERT stays under its sequence limit."""
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    # Prefer breaks on whitespace; fall back to hard cuts.
+    parts = re.split(r"(\s+)", text)
+    for part in parts:
+        if not part:
+            continue
+        if buf and buf_len + len(part) > max_chars:
+            chunks.append("".join(buf).strip())
+            buf = []
+            buf_len = 0
+        if len(part) > max_chars:
+            if buf:
+                chunks.append("".join(buf).strip())
+                buf = []
+                buf_len = 0
+            for i in range(0, len(part), max_chars):
+                piece = part[i : i + max_chars].strip()
+                if piece:
+                    chunks.append(piece)
+            continue
+        buf.append(part)
+        buf_len += len(part)
+    if buf:
+        tail = "".join(buf).strip()
+        if tail:
+            chunks.append(tail)
+    return chunks or [text]
 
 
 def apply_ruaccent(
@@ -853,11 +896,31 @@ def apply_ruaccent(
     custom_dict: dict[str, str] | None = None,
 ) -> str:
     """Mark Russian stress with `+` before the stressed vowel (Silero-compatible)."""
+    global _ruaccentizer, _ruaccentizer_key
+
     if not text.strip():
         return text
-    accentizer = _get_ruaccentizer(model_size, custom_dict)
+
+    chunks = _chunk_text_for_ruaccent(text)
+    outputs: list[str] = []
     with _ruaccent_lock:
-        return str(accentizer.process_all(text))
+        accentizer = _get_ruaccentizer(model_size, custom_dict)
+        for index, chunk in enumerate(chunks):
+            try:
+                outputs.append(str(accentizer.process_all(chunk)))
+            except Exception as exc:
+                # ONNX can leave the session unusable after an overlong sequence.
+                print(f"ruaccent skip ({type(exc).__name__}): {exc}", flush=True)
+                outputs.append(chunk)
+                _ruaccentizer = None
+                _ruaccentizer_key = None
+                try:
+                    accentizer = _get_ruaccentizer(model_size, custom_dict)
+                except Exception as reload_exc:
+                    print(f"ruaccent reload failed: {reload_exc}", flush=True)
+                    outputs.extend(chunks[index + 1 :])
+                    break
+    return " ".join(outputs) if len(outputs) > 1 else (outputs[0] if outputs else text)
 
 
 def prepare_tts_spoken_text(
