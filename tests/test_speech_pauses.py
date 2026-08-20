@@ -48,6 +48,38 @@ class SpeechPausesTests(unittest.TestCase):
         clauses = ltts.split_speech_clauses("1.3 Стоимость ошибки.")
         self.assertNotIn("1.", clauses)
 
+    def test_orphan_punct_glues_or_drops(self) -> None:
+        self.assertEqual(ltts.split_speech_clauses(", дальше."), ["дальше."])
+        self.assertEqual(ltts.split_speech_clauses("."), [])
+        self.assertEqual(
+            ltts.split_speech_clauses("да, , нет."),
+            ["да,", "нет."],
+        )
+        self.assertEqual(
+            ltts.split_speech_clauses("ссылка). , дальше."),
+            ["ссылка).", "дальше."],
+        )
+        glued = ltts.split_speech_clauses("слово,")
+        self.assertEqual(glued, ["слово,"])
+        self.assertTrue(ltts.is_punct_only_clause(","))
+        self.assertTrue(ltts.is_punct_only_clause("."))
+        self.assertTrue(ltts.is_punct_only_clause(":"))
+        self.assertFalse(ltts.is_punct_only_clause("1."))
+        self.assertFalse(ltts.is_punct_only_clause("16%"))
+
+    def test_quote_trailing_comma_not_own_clause(self) -> None:
+        segments = ltts.split_quote_segments("«цитата», дальше.")
+        clauses: list[str] = []
+        for text, _is_quote in segments:
+            clauses.extend(ltts.split_speech_clauses(text))
+        self.assertNotIn(",", clauses)
+        self.assertTrue(any("цитата" in part for part in clauses))
+        self.assertTrue(any(part.startswith("дальше") for part in clauses))
+
+    def test_list_markers_still_own_clause(self) -> None:
+        clauses = ltts.split_speech_clauses("1. пункт два.")
+        self.assertIn("1.", clauses)
+
     def test_pause_ms_mapping(self) -> None:
         pauses = ltts.SpeechPauses()
         self.assertEqual(ltts.pause_ms_after_text("да,", pauses), 150)

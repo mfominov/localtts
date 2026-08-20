@@ -1575,6 +1575,9 @@ def _dot_is_part_heading(text: str, idx: int) -> bool:
     return _PART_HEADING_LABEL_RE.search(text[:idx].rstrip()) is not None
 
 
+_PUNCT_ONLY_RE = re.compile(r"[.!?,;:—–-]+")
+
+
 def split_speech_clauses(text: str) -> list[str]:
     """Split on ,.!?;:— keeping the trailing punctuation on each clause.
 
@@ -1594,8 +1597,9 @@ def split_speech_clauses(text: str) -> list[str]:
         clause = clause.strip()
         if not clause:
             return
-        if clauses and re.fullmatch(r"[.!?,;:—–-]+", clause):
-            clauses[-1] += clause
+        if _PUNCT_ONLY_RE.fullmatch(clause):
+            if clauses and not _PUNCT_ONLY_RE.fullmatch(clauses[-1][-1]):
+                clauses[-1] += clause
             return
         clauses.append(clause)
 
@@ -2009,6 +2013,12 @@ def prepare_silero_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def is_punct_only_clause(text: str) -> bool:
+    """True for `,` / `.` / `:` / dashes only — not `1.` or `%`."""
+    cleaned = prepare_silero_text(text)
+    return bool(cleaned) and _PUNCT_ONLY_RE.fullmatch(cleaned) is not None
+
+
 def is_speakable_for_silero(text: str) -> bool:
     """Reject empty / digits-only / punctuation-only fragments Silero ValueError's on."""
     cleaned = prepare_silero_text(text)
@@ -2076,6 +2086,8 @@ def synthesize_with_silero(
                 for clause_idx, clause in enumerate(clauses):
                     for part in chunk_text(clause, max_chars=max_chars):
                         part = prepare_silero_text(part)
+                        if is_punct_only_clause(part):
+                            continue
                         if not is_speakable_for_silero(part):
                             skipped += 1
                             print(
