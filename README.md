@@ -269,7 +269,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 Настройки в `patterns/default.yml` (или `PATTERNS_FILE=./my.yml`):
 
 - **`AI` / `ИИ`** — на этапе extract (`ai_spoken_as` / `ii_spoken_as`, по умолчанию `эй ай` / `и и`). В плеере снова показываются как `AI` / `ИИ`.
-- **Бренды и аббревиатуры** (`PSLC`, `ROI`, …) — секция `pronounce:`; подставляются только перед TTS.
+- **Бренды и аббревиатуры** (`PSLC`, `ROI`, …) — секция `pronounce:`; подставляются только перед TTS. ID исследований Gartner (`G00845936`) на extract нормализуются в слово `Gartner` (даты/авторы/`n=` сохраняются).
 - **Новые кандидаты для словаря** — `make pronounce-candidates PDF=./doc.pdf` (или `TEXT=…`, опционально `LOG=./log`): латиница (частота ≥2; ALLCAPS вроде FAA — уже с ×1), Title-Case фразы, плюс `Silero skip (ValueError)` из лога. YAML-скелет и промпт для ChatGPT. Без API; вмержи в `patterns/default.yml` вручную. Не бери `OUT_DIR/*.txt` после TTS — там уже spoken.
 - **Числа / даты / % / валюта / `№`** — `normalize_numbers: true` в patterns; модуль `normalize_numbers.py` (только перед TTS). Также `≥`/`≤`, годы с предлогом (`к 2028 году`), родительный после «не менее/более…» (`не менее 20%` → «двадцати процентов»), порядковые `1-е`/`2-й`. Суммы с масштабом: `$1,04 млрд` / `2 млн` / `5 тыс` → «примерно … миллиард/миллион/тысяч …» (дробь отбрасывается).
 - **Silero ё/ударения** — `silero.put_yo` / `silero.put_accent` (по умолчанию `true`). Массовый stress: `silero.ruaccent: true` (пакет `ruaccent`, модель `silero.ruaccent_model`, default `turbo3.1`; первый запуск качает модели с Hugging Face). Порядок: pronounce → NUM → **ruaccent** → `homographs:`. Омографы вручную: `замок: "зам+ок"` (+ перед ударной гласной); только для Silero. Opt-out: `silero.ruaccent: false`.

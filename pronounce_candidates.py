@@ -55,6 +55,9 @@ def is_interesting_candidate(token: str) -> bool:
     """Keep brands/acronyms/versions; drop plain lowercase English glue."""
     if len(token) < 2:
         return False
+    # Gartner GDOC IDs are normalized away before TTS; never suggest pronounce entries.
+    if re.fullmatch(r"G\d{8}", token):
+        return False
     if " " in token:
         # Multi-word Title Case already filtered by collector.
         return all(part[:1].isupper() for part in token.split() if part)

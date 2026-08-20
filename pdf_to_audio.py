@@ -352,6 +352,36 @@ def polish_extracted_text(text: str) -> str:
     return detach_glued_part_headings(text)
 
 
+_GDOC_ID_RE = re.compile(r"\bG\d{8}\b")
+_GARTNER_PLUS_GDOC_RE = re.compile(r"\b(Gartner)\s+G\d{8}\b", flags=re.IGNORECASE)
+# Gartner (G00851662, Authors...) → Gartner (Authors...); no duplicate Gartner.
+_GARTNER_PAREN_GDOC_RE = re.compile(
+    r"\bGartner\s*\(\s*G\d{8}\s*(?:,\s*|\))",
+    flags=re.IGNORECASE,
+)
+
+
+def normalize_gartner_gdoc(text: str) -> str:
+    """Replace Gartner GDOC IDs (G########) for TTS; keep attribution and citation metadata."""
+    if not text or not _GDOC_ID_RE.search(text):
+        return text
+
+    def paren_repl(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        return "Gartner (" if raw.rstrip().endswith(",") else "Gartner"
+
+    text = _GARTNER_PAREN_GDOC_RE.sub(paren_repl, text)
+    text = _GARTNER_PLUS_GDOC_RE.sub(r"\1", text)
+    text = _GDOC_ID_RE.sub("Gartner", text)
+    # Local punctuation artifacts from ID removal only.
+    text = re.sub(r"\(\s*,", "(", text)
+    text = re.sub(r",\s*,", ",", text)
+    text = re.sub(r",\s*\)", ")", text)
+    text = re.sub(r"\(\s+\)", "", text)
+    text = re.sub(r"\(\s+", "(", text)
+    return text
+
+
 def expand_heading_section_numbers(text: str) -> str:
     """Turn heading `1.3 Title` into `один точка три Title` so NUM does not read a decimal."""
 
@@ -1185,6 +1215,7 @@ def extract_pages_text(
         normalized = expand_section_references(normalized)
         if strip_artifacts and cleaning is not None:
             normalized = strip_inline_page_artifacts(normalized, cleaning)
+        normalized = normalize_gartner_gdoc(normalized)
         if stylize_quotes:
             normalized = stylize_quoted_speech(normalized)
         pages_text.append(normalized)
