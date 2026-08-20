@@ -10,7 +10,7 @@
 - Ступени: `0.75 1 1.25 1.5 1.75 2`
 - UI: − / значение / + рядом с transport; клик по значению → `1×`
 - Клавиши `[` / `]` (без модификаторов, не в input)
-- Persist: `localStorage` ключ `localtts-playback-rate`
+- Persist: `localStorage` ключ `localtts-playback-rate`; пусто / невалидно → **1×** (не 0.75: `Number(null)===0`)
 - `playbackRate` заново после `load()` / `play` (смена главы не сбрасывает)
 - `preservesPitch` / `webkitPreservesPitch` = true
 - Strip дубля заголовков — `.scratch/heading-speech/`, не этот spec

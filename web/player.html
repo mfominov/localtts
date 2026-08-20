@@ -660,6 +660,7 @@
     const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
     const ICON_PAUSE = '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>';
     const SPEED_KEY = "localtts-playback-rate";
+    const DEFAULT_RATE = 1;
     const SPEED_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
     let manifest = null;
@@ -667,7 +668,7 @@
     let currentSectionId = null;
     let sentenceNodes = [];
     let seeking = false;
-    let playbackRate = 1;
+    let playbackRate = DEFAULT_RATE;
     // Highlight slightly behind wall-clock audio; estimates still drift a bit.
     const HIGHLIGHT_LAG_SEC = 0.45;
 
@@ -684,8 +685,9 @@
     }
 
     function nearestRate(value) {
+      if (value == null || value === "") return DEFAULT_RATE;
       const num = Number(value);
-      if (!Number.isFinite(num)) return 1;
+      if (!Number.isFinite(num)) return DEFAULT_RATE;
       return SPEED_RATES.reduce((best, rate) =>
         Math.abs(rate - num) < Math.abs(best - num) ? rate : best
       );
@@ -695,7 +697,7 @@
       try {
         return nearestRate(localStorage.getItem(SPEED_KEY));
       } catch (_) {
-        return 1;
+        return DEFAULT_RATE;
       }
     }
 
@@ -1171,7 +1173,7 @@
     });
     speedDownBtn.addEventListener("click", () => stepPlaybackRate(-1));
     speedUpBtn.addEventListener("click", () => stepPlaybackRate(1));
-    speedValueBtn.addEventListener("click", () => applyPlaybackRate(1));
+    speedValueBtn.addEventListener("click", () => applyPlaybackRate(DEFAULT_RATE));
     document.addEventListener("keydown", (event) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const tag = String(event.target?.tagName || "");
