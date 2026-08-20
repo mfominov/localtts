@@ -52,6 +52,43 @@ class SpeechPausesTests(unittest.TestCase):
         self.assertEqual(ltts.pause_ms_after_text("да:", pauses), 250)
         self.assertEqual(ltts.pause_ms_after_text("PSLC—", pauses), 400)
         self.assertEqual(ltts.pause_ms_after_text("без знака", pauses), 0)
+        self.assertEqual(
+            ltts.pause_ms_between_clauses(
+                "процентных пункта",
+                "(статистически значимая разница)",
+                pauses,
+            ),
+            280,
+        )
+        self.assertEqual(
+            ltts.pause_ms_between_clauses(
+                "(статистически значимая разница)",
+                "дальше текст",
+                pauses,
+            ),
+            280,
+        )
+        self.assertEqual(ltts.pause_ms_after_text("(ссылка)", pauses), 280)
+        self.assertLess(pauses.paren_ms, pauses.dash_ms)
+
+    def test_split_before_and_after_parens(self) -> None:
+        self.assertEqual(
+            ltts.split_speech_clauses("пункта (статистически значимая разница) дальше."),
+            ["пункта", "(статистически значимая разница)", "дальше."],
+        )
+        self.assertEqual(
+            ltts.split_speech_clauses("пункта (статистически значимая разница)."),
+            ["пункта", "(статистически значимая разница)."],
+        )
+
+    def test_percent_before_dash_speakable_after_tts(self) -> None:
+        text = "16% — слабая, 8% — никакой, 29% — не могут оценить"
+        spoken = ltts.prepare_tts_spoken_text(text)
+        self.assertIn("шестнадцать процентов", spoken)
+        self.assertIn("восемь процентов", spoken)
+        self.assertIn("двадцать девять процентов", spoken)
+        for clause in ltts.split_speech_clauses(spoken):
+            self.assertTrue(ltts.is_speakable_for_silero(clause), clause)
 
     def test_patterns_load_speech_section(self) -> None:
         patterns = ltts.load_cleaning_patterns(ltts.DEFAULT_PATTERNS_FILE)
@@ -59,6 +96,7 @@ class SpeechPausesTests(unittest.TestCase):
         self.assertEqual(patterns.speech_pauses.period_ms, 400)
         self.assertEqual(patterns.speech_pauses.comma_ms, 150)
         self.assertEqual(patterns.speech_pauses.dash_ms, 400)
+        self.assertEqual(patterns.speech_pauses.paren_ms, 280)
 
     def test_chunk_limit_default(self) -> None:
         self.assertEqual(ltts.DEFAULT_SILERO_CHUNK_CHARS, 300)

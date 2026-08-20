@@ -24,6 +24,35 @@ class PronounceHelpersTests(unittest.TestCase):
             "см. в разделе три точка два и в разделе пять точка два",
         )
 
+    def test_section_range_spoken_and_display(self) -> None:
+        extracted = ltts.expand_section_references("см. §4.1–4.9 и матрица (§4.11).")
+        self.assertIn("в разделах 4 точка 1 — 4 точка 9", extracted)
+        self.assertIn("в разделе 4 точка 11", extracted)
+        display = ltts.section_refs_for_display(extracted)
+        self.assertIn("§4.1–4.9", display)
+        self.assertIn("§4.11", display)
+        spoken = ltts.prepare_tts_spoken_text(extracted, self.patterns.pronounce)
+        self.assertIn("смотри в разделах четыре точка один — четыре точка девять", spoken)
+        self.assertNotIn("см.", spoken)
+
+    def test_sm_abbreviation_spoken(self) -> None:
+        self.assertEqual(ltts.expand_sm_abbreviation("см. таблицу 5"), "смотри в таблицу 5")
+        self.assertEqual(
+            ltts.expand_sm_abbreviation("см. в разделе три"),
+            "смотри в разделе три",
+        )
+
+    def test_pronounce_stack_red_team_bulletin(self) -> None:
+        spoken = ltts.prepare_tts_spoken_text(
+            "ITSM-стек, red teaming и service bulletin, а также технологического стека.",
+            self.patterns.pronounce,
+        )
+        low = spoken.casefold()
+        self.assertIn("стэк", low)
+        self.assertIn("ред тиминг", low)
+        self.assertIn("сервис буллетин", low)
+        self.assertNotIn("стек", low.replace("стэк", "").replace("стэка", ""))
+
     def test_prepare_tts_keeps_ui_path_with_arabic(self) -> None:
         extracted = ltts.expand_section_references("Шкала (§4.2) и команда (§3.4).")
         display = ltts.section_refs_for_display(extracted)

@@ -44,7 +44,25 @@ _CURRENCY_SUFFIX_RE = re.compile(
 
 _PERCENT_RE = re.compile(
     r"(?<![A-Za-zА-Яа-яЁё0-9])"
+    r"(?:(?P<pre>не\s+менее|не\s+более|более|менее|свыше|около|порядка|от|до)\s+)?"
     r"(?P<num>\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*%"
+    r"(?![A-Za-zА-Яа-яЁё0-9])"
+)
+
+# не менее 20 / свыше 5 — after percent so `20%` is not eaten twice.
+_GENITIVE_NUM_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9])"
+    r"(?P<pre>не\s+менее|не\s+более|более|менее|свыше|около|порядка|от|до)\s+"
+    r"(?P<num>\d{1,3}(?:[ \u00a0]\d{3})+|\d+)"
+    r"(?![A-Za-zА-Яа-яЁё0-9.%]|-)"
+)
+
+# 1-е место / 2-й / 3-я — before bare integers so `1-е` is not `один-е`.
+_ORDINAL_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9.])"
+    r"(?P<num>\d{1,3})"
+    r"-"
+    r"(?P<suf>его|ому|ыми|ый|ой|ое|ая|ых|ым|ую|ей|го|му|ми|х|й|е|я|м|ю)"
     r"(?![A-Za-zА-Яа-яЁё0-9])"
 )
 
@@ -115,6 +133,30 @@ _YEAR_CASE_NOUN = {
     "n": "год",
 }
 
+# Hyphen ordinal suffix → (gender, case, plural) for num2words RU.
+_ORDINAL_SUFFIX = {
+    "ый": ("m", "n", False),
+    "ой": ("m", "n", False),
+    "й": ("m", "n", False),
+    "ое": ("n", "n", False),
+    "е": ("n", "n", False),
+    "ая": ("f", "n", False),
+    "я": ("f", "n", False),
+    "его": ("m", "g", False),
+    "го": ("m", "g", False),
+    "ому": ("m", "d", False),
+    "му": ("m", "d", False),
+    "ыми": ("m", "i", True),
+    "ми": ("m", "i", True),
+    "ых": ("m", "g", True),
+    "х": ("m", "g", True),
+    "ым": ("m", "p", False),
+    "м": ("m", "p", False),
+    "ую": ("f", "a", False),
+    "ю": ("f", "a", False),
+    "ей": ("f", "g", False),
+}
+
 
 def _num2words():
     try:
@@ -140,19 +182,25 @@ def _parse_number_token(raw: str) -> Decimal:
     return Decimal(cleaned)
 
 
-def _cardinal(value: int | Decimal) -> str:
-    num2words, _ = _num2words()
+def _cardinal(value: int | Decimal, case: str = "n") -> str:
+    num2words, converter = _num2words()
     if isinstance(value, Decimal):
         if value == value.to_integral_value():
-            return num2words(int(value), lang="ru")
+            return converter.to_cardinal(int(value), case=case)
         # Prefer "двадцать пять" style for money-like decimals via float words.
         return num2words(float(value), lang="ru")
-    return num2words(int(value), lang="ru")
+    return converter.to_cardinal(int(value), case=case)
 
 
-def _percent_noun(n: int) -> str:
+def _percent_noun(n: int, case: str = "n") -> str:
     n_abs = abs(n) % 100
     n1 = n_abs % 10
+    if case == "g":
+        if 11 <= n_abs <= 14:
+            return "процентов"
+        if n1 == 1:
+            return "процента"
+        return "процентов"
     if 11 <= n_abs <= 14:
         return "процентов"
     if n1 == 1:
@@ -162,12 +210,21 @@ def _percent_noun(n: int) -> str:
     return "процентов"
 
 
-def _speak_percent(raw: str) -> str:
+def _speak_percent(raw: str, case: str = "n") -> str:
     amount = _parse_number_token(raw)
     if amount == amount.to_integral_value():
         n = int(amount)
-        return f"{_cardinal(n)} {_percent_noun(n)}"
+        return f"{_cardinal(n, case=case)} {_percent_noun(n, case=case)}"
     return f"{_cardinal(amount)} процентов"
+
+
+def _speak_ordinal(raw: str, suffix: str) -> str | None:
+    spec = _ORDINAL_SUFFIX.get(suffix.casefold())
+    if not spec:
+        return None
+    gender, case, plural = spec
+    _, converter = _num2words()
+    return converter.to_ordinal(int(raw), case=case, gender=gender, plural=plural)
 
 
 def _strip_zero_fraction(spoken: str) -> str:
@@ -252,9 +309,23 @@ def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
 
     def sub_percent(match: re.Match[str]) -> str:
         try:
-            return park(_speak_percent(match.group("num")))
+            case = "g" if match.group("pre") else "n"
+            spoken = _speak_percent(match.group("num"), case=case)
+            prefix = match.group("pre")
+            return park(f"{prefix} {spoken}" if prefix else spoken)
         except (InvalidOperation, ValueError):
             return match.group(0)
+
+    def sub_genitive_num(match: re.Match[str]) -> str:
+        try:
+            spoken = _cardinal(int(_parse_number_token(match.group("num"))), case="g")
+            return park(f"{match.group('pre')} {spoken}")
+        except (InvalidOperation, ValueError):
+            return match.group(0)
+
+    def sub_ordinal(match: re.Match[str]) -> str:
+        spoken = _speak_ordinal(match.group("num"), match.group("suf"))
+        return park(spoken) if spoken else match.group(0)
 
     def sub_numero(match: re.Match[str]) -> str:
         try:
@@ -292,6 +363,8 @@ def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
     result = _NUMERO_RE.sub(sub_numero, result)
     result = _COMPARE_RE.sub(sub_compare, result)
     result = _YEAR_PREP_RE.sub(sub_year_prep, result)
+    result = _GENITIVE_NUM_RE.sub(sub_genitive_num, result)
+    result = _ORDINAL_RE.sub(sub_ordinal, result)
     result = _DECIMAL_RE.sub(sub_decimal, result)
     result = _INTEGER_RE.sub(sub_integer, result)
 

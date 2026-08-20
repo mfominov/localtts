@@ -25,6 +25,32 @@ class NormalizeNumbersTests(unittest.TestCase):
             with self.subTest(src=src):
                 self.assertEqual(normalize_numbers_for_speech(src), expected)
 
+    def test_percent_genitive_after_ne_menee(self) -> None:
+        self.assertEqual(
+            normalize_numbers_for_speech("не менее 20%"),
+            "не менее двадцати процентов",
+        )
+        self.assertEqual(
+            normalize_numbers_for_speech("не более 1%"),
+            "не более одного процента",
+        )
+        self.assertEqual(
+            normalize_numbers_for_speech("свыше 2%"),
+            "свыше двух процентов",
+        )
+        self.assertEqual(
+            normalize_numbers_for_speech("не менее 5"),
+            "не менее пяти",
+        )
+
+    def test_ordinal_hyphen(self) -> None:
+        self.assertEqual(
+            normalize_numbers_for_speech("а 1-е место с уровнем 53"),
+            "а первое место с уровнем пятьдесят три",
+        )
+        self.assertEqual(normalize_numbers_for_speech("2-й квартал"), "второй квартал")
+        self.assertEqual(normalize_numbers_for_speech("3-я волна"), "третья волна")
+
     def test_date(self) -> None:
         spoken = normalize_numbers_for_speech("с 01.01.2024 года")
         self.assertIn("первое января", spoken)
@@ -78,7 +104,7 @@ class NormalizeNumbersTests(unittest.TestCase):
             patterns.pronounce,
             normalize_numbers=patterns.normalize_numbers,
         )
-        self.assertIn("три точка два", spoken)
+        self.assertIn("смотри в разделе три точка два", spoken)
         self.assertIn("рои", spoken.casefold())
         self.assertIn("двадцать процентов", spoken)
         self.assertIn("джи пи ти три точка пять", spoken.casefold())
@@ -86,6 +112,7 @@ class NormalizeNumbersTests(unittest.TestCase):
         self.assertNotIn("§", spoken)
         # Must not turn §3.2 into a decimal fraction reading.
         self.assertNotIn("целых", spoken)
+        self.assertNotIn("см.", spoken)
 
 
 if __name__ == "__main__":

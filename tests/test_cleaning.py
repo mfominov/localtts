@@ -152,6 +152,24 @@ skip_toc:
         self.assertNotIn("1.", clauses)
         self.assertTrue(any(part.startswith("1.3") for part in clauses))
 
+    def test_punctuate_table_rows_keeps_row_periods(self) -> None:
+        raw = "\n".join(
+            [
+                "Барьер    Доля    Механика",
+                "Ограничения бюджета    50%    Бизнес-кейс отвергается",
+                "Интеграция ИИ    48%    Legacy без API",
+            ]
+        )
+        marked = ltts.punctuate_table_rows(raw)
+        self.assertIn("Барьер | Доля | Механика.", marked)
+        self.assertIn("Ограничения бюджета | 50% | Бизнес-кейс отвергается.", marked)
+        spoken = ltts.prepare_tts_spoken_text(ltts.normalize_text(raw))
+        self.assertIn("пятьдесят процентов", spoken)
+        self.assertIn(",", spoken)
+        self.assertNotIn("|", spoken)
+        sentences = ltts.split_sentences(ltts.normalize_text(raw))
+        self.assertGreaterEqual(len(sentences), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

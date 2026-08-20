@@ -199,9 +199,64 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _split_table_row_cells(line: str) -> list[str]:
+    parts = [part.strip() for part in re.split(r"\t+|\s{2,}", line.strip()) if part.strip()]
+    return parts
+
+
+def _looks_like_table_row(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or len(stripped) > 400:
+        return False
+    if len(_split_table_row_cells(stripped)) < 2:
+        return False
+    return bool(re.search(r"[A-Za-zА-Яа-яЁё]{3,}", stripped))
+
+
+def _looks_like_table_header(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or len(stripped) > 160 or stripped[-1] in ".!?…":
+        return False
+    return bool(re.search(r"[A-Za-zА-Яа-яЁё]{3,}", stripped))
+
+
+def _format_table_row_line(line: str) -> str:
+    cells = _split_table_row_cells(line)
+    body = " | ".join(cells) if len(cells) >= 2 else line.strip()
+    if body and body[-1] not in ".!?…":
+        body += "."
+    return body
+
+
+def punctuate_table_rows(text: str) -> str:
+    """Turn consecutive table-like lines into period-terminated `cell | cell` rows."""
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return text
+    is_row = [_looks_like_table_row(line) for line in lines]
+    out = list(lines)
+    idx = 0
+    while idx < len(lines):
+        if not is_row[idx]:
+            idx += 1
+            continue
+        start = idx
+        if start > 0 and not is_row[start - 1] and _looks_like_table_header(lines[start - 1]):
+            start -= 1
+        end = idx + 1
+        while end < len(lines) and is_row[end]:
+            end += 1
+        if end - start >= 2:
+            for row_idx in range(start, end):
+                out[row_idx] = _format_table_row_line(lines[row_idx])
+        idx = end
+    return "\n".join(out)
+
+
 def normalize_text(text: str) -> str:
     text = text.replace("\r", "\n")
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+    text = punctuate_table_rows(text)
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
@@ -287,6 +342,8 @@ class SpeechPauses:
     semicolon_ms: int = 250
     colon_ms: int = 250
     dash_ms: int = 400
+    # Opening/closing paren: a beat shorter than spaced dash.
+    paren_ms: int = 280
 
 
 @dataclass
@@ -405,6 +462,7 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         semicolon_ms=int(pauses_raw.get("semicolon_ms", 250)),
         colon_ms=int(pauses_raw.get("colon_ms", 250)),
         dash_ms=int(pauses_raw.get("dash_ms", 400)),
+        paren_ms=int(pauses_raw.get("paren_ms", 280)),
     )
     dialogue_raw = speech_raw.get("dialogue") or {}
     if dialogue_raw and not isinstance(dialogue_raw, dict):
@@ -519,25 +577,48 @@ def apply_pronunciation_fixes(text: str, ai_spoken_as: str, ii_spoken_as: str) -
     return text
 
 
+SECTION_RANGE = re.compile(r"§\s*(?P<a>\d+(?:\.\d+)*)\s*[–—−-]\s*§?\s*(?P<b>\d+(?:\.\d+)*)")
 SECTION_REFERENCE = re.compile(r"§\s*(\d+(?:\.\d+)*)")
+_SM_BEFORE_V = re.compile(r"(?<![A-Za-zА-Яа-яЁё])см\.(?=\s*в\b)", flags=re.IGNORECASE)
+_SM_BARE = re.compile(r"(?<![A-Za-zА-Яа-яЁё])см\.", flags=re.IGNORECASE)
+_TABLE_PIPE_RE = re.compile(r"\s*\|\s*")
+
+
+def _dotted_section_to_spoken(number: str) -> str:
+    return " точка ".join(number.split("."))
 
 
 def expand_section_references(text: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        parts = match.group(1).split(".")
-        numbering = " точка ".join(parts)
-        return f"в разделе {numbering}"
+    def repl_range(match: re.Match[str]) -> str:
+        left = _dotted_section_to_spoken(match.group("a"))
+        right = _dotted_section_to_spoken(match.group("b"))
+        return f"в разделах {left} — {right}"
 
+    def repl(match: re.Match[str]) -> str:
+        return f"в разделе {_dotted_section_to_spoken(match.group(1))}"
+
+    text = SECTION_RANGE.sub(repl_range, text)
     return SECTION_REFERENCE.sub(repl, text)
 
 
+def expand_sm_abbreviation(text: str) -> str:
+    """TTS-only: `см.` → `смотри в`, or `смотри` when `в` is already next (`см. в разделе`)."""
+    text = _SM_BEFORE_V.sub("смотри", text)
+    return _SM_BARE.sub("смотри в", text)
+
+
+SPOKEN_SECTION_RANGE = re.compile(
+    r"в разделах\s+(\d+(?:\s+точка\s+\d+)+)\s+[—–-]\s+(\d+(?:\s+точка\s+\d+)+)",
+    flags=re.IGNORECASE,
+)
 SPOKEN_SECTION_REF = re.compile(
     r"в разделе\s+(\d+(?:\s+точка\s+\d+)+)",
     flags=re.IGNORECASE,
 )
 
 _SPOKEN_SECTION_DIGITS = re.compile(
-    r"(в разделе\s+)(\d+(?:\s+точка\s+\d+)+)",
+    r"(в раздел(?:е|ах)\s+)(\d+(?:\s+точка\s+\d+)+)"
+    r"(?:\s+[—–-]\s+(\d+(?:\s+точка\s+\d+)+))?",
     flags=re.IGNORECASE,
 )
 
@@ -613,11 +694,16 @@ def int_to_ru_words(value: int) -> str:
 def expand_section_ref_digits_to_words(text: str) -> str:
     """Turn `в разделе 3 точка 2` into `в разделе три точка два` for TTS."""
 
+    def dotted_to_words(chunk: str) -> str:
+        parts = re.split(r"\s+точка\s+", chunk, flags=re.IGNORECASE)
+        return " точка ".join(int_to_ru_words(int(part)) for part in parts)
+
     def repl(match: re.Match[str]) -> str:
         prefix = match.group(1)
-        parts = re.split(r"\s+точка\s+", match.group(2), flags=re.IGNORECASE)
-        words = [int_to_ru_words(int(part)) for part in parts]
-        return prefix + " точка ".join(words)
+        spoken = dotted_to_words(match.group(2))
+        if match.group(3):
+            return f"{prefix}{spoken} — {dotted_to_words(match.group(3))}"
+        return prefix + spoken
 
     return _SPOKEN_SECTION_DIGITS.sub(repl, text)
 
@@ -651,9 +737,12 @@ def prepare_tts_spoken_text(
     spoken = expand_section_references(text)
     spoken = expand_heading_section_numbers(spoken)
     spoken = expand_section_ref_digits_to_words(spoken)
+    spoken = expand_sm_abbreviation(spoken)
     # Pronounce before NUM so tokens like GPT-3.5 / R0-R5 are not eaten as decimals.
     spoken = apply_pronounce_map(spoken, pronounce)
     spoken = normalize_numbers_for_speech(spoken, enabled=normalize_numbers)
+    # Table cells: keep `|` in cues/UI; speak as comma (short pause).
+    spoken = _TABLE_PIPE_RE.sub(", ", spoken)
     # Homograph +stress markers are Silero-only; callers pass homographs only for silero.
     spoken = apply_pronounce_map(spoken, homographs)
     return spoken
@@ -662,10 +751,16 @@ def prepare_tts_spoken_text(
 def section_refs_for_display(text: str) -> str:
     """Keep spoken wording for TTS, but show §N.M / AI / ИИ in the reader UI."""
 
-    def repl(match: re.Match[str]) -> str:
-        numbers = re.findall(r"\d+", match.group(1))
-        return f"§{'.'.join(numbers)}"
+    def dotted(group: str) -> str:
+        return ".".join(re.findall(r"\d+", group))
 
+    def repl_range(match: re.Match[str]) -> str:
+        return f"§{dotted(match.group(1))}–{dotted(match.group(2))}"
+
+    def repl(match: re.Match[str]) -> str:
+        return f"§{dotted(match.group(1))}"
+
+    text = SPOKEN_SECTION_RANGE.sub(repl_range, text)
     text = SPOKEN_SECTION_REF.sub(repl, text)
     # Spoken "эй ай" / "эй-ай" back to AI, including identifiers like эй ай_saved_hours.
     text = re.sub(r"эй[\s\-–—]*ай", "AI", text, flags=re.IGNORECASE)
@@ -1424,6 +1519,7 @@ def split_speech_clauses(text: str) -> list[str]:
 
     Spaced dashes (` - `, ` — `, ` – `) become a clause break (title — subtitle).
     Hyphens inside tokens (`AI-Disrupt`) are left alone.
+    `(` starts a new clause and `)` ends one so `paren_ms` sits before and after.
     """
     text = text.strip()
     if not text:
@@ -1432,18 +1528,32 @@ def split_speech_clauses(text: str) -> list[str]:
     text = re.sub(r"(?<=\S)\s*[-–—]\s+(?=\S)", "—", text)
     clauses: list[str] = []
     buf: list[str] = []
+
+    def emit(clause: str) -> None:
+        clause = clause.strip()
+        if not clause:
+            return
+        if clauses and re.fullmatch(r"[.!?,;:—–-]+", clause):
+            clauses[-1] += clause
+            return
+        clauses.append(clause)
+
     for idx, ch in enumerate(text):
+        if ch == "(":
+            emit("".join(buf))
+            buf = ["("]
+            continue
         buf.append(ch)
+        if ch == ")":
+            emit("".join(buf))
+            buf = []
+            continue
         if ch in ".!?,;:—":
             if ch == "." and _dot_is_inside_dotted_number(text, idx):
                 continue
-            clause = "".join(buf).strip()
-            if clause:
-                clauses.append(clause)
+            emit("".join(buf))
             buf = []
-    tail = "".join(buf).strip()
-    if tail:
-        clauses.append(tail)
+    emit("".join(buf))
     return clauses
 
 
@@ -1463,8 +1573,19 @@ def pause_ms_after_text(text: str, pauses: SpeechPauses) -> int:
         "—": pauses.dash_ms,
         "–": pauses.dash_ms,
         "-": pauses.dash_ms,
+        ")": pauses.paren_ms,
     }
     return max(0, int(mapping.get(mark, 0)))
+
+
+_TRAILING_PAREN = re.compile(r"\)[.!?,;:—–-]*$")
+
+
+def pause_ms_between_clauses(left: str, right: str, pauses: SpeechPauses) -> int:
+    gap_ms = pause_ms_after_text(left, pauses)
+    if right.lstrip().startswith("(") or _TRAILING_PAREN.search(left.rstrip()):
+        gap_ms = max(gap_ms, pauses.paren_ms)
+    return gap_ms
 
 
 def audio_duration_seconds(audio_file: pathlib.Path) -> float:
@@ -1882,7 +2003,13 @@ def synthesize_with_silero(
                     gap = silence_ms(dialogue.quote_before_ms)
                     if gap is not None and gap.numel() > 0:
                         sentence_parts.append(gap)
-                clauses = split_speech_clauses(seg_text) or [seg_text]
+                tts_seg = prepare_tts_spoken_text(
+                    seg_text,
+                    pronounce,
+                    normalize_numbers=normalize_numbers,
+                    homographs=homographs,
+                )
+                clauses = split_speech_clauses(tts_seg) or [tts_seg]
                 for clause_idx, clause in enumerate(clauses):
                     for part in chunk_text(clause, max_chars=max_chars):
                         part = prepare_silero_text(part)
@@ -1893,15 +2020,9 @@ def synthesize_with_silero(
                                 flush=True,
                             )
                             continue
-                        tts_part = prepare_tts_spoken_text(
-                            part,
-                            pronounce,
-                            normalize_numbers=normalize_numbers,
-                            homographs=homographs,
-                        )
                         try:
                             audio = model.apply_tts(
-                                text=tts_part,
+                                text=part,
                                 speaker=speaker,
                                 sample_rate=sample_rate,
                                 put_yo=put_yo,
@@ -1926,7 +2047,9 @@ def synthesize_with_silero(
                         )
                     # Intra-sentence pause after comma/colon/… (inside the sentence cue).
                     if clause_idx < len(clauses) - 1:
-                        gap = silence_ms(pause_ms_after_text(clause, pauses))
+                        gap = silence_ms(
+                            pause_ms_between_clauses(clause, clauses[clause_idx + 1], pauses)
+                        )
                         if gap is not None and gap.numel() > 0:
                             sentence_parts.append(gap)
                 if use_quote_pause:

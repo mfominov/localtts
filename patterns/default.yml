@@ -60,6 +60,8 @@ speech:
     colon_ms: 250
     # Spaced dash/тире (title - subtitle); not hyphen inside AI-Disrupt
     dash_ms: 400
+    # Opening parenthesis: slightly shorter than dash (also after `)`)
+    paren_ms: 280
   dialogue:
     quote_before_ms: 280
     quote_after_ms: 180
@@ -86,7 +88,15 @@ pronounce:
   AIOps: "эй ай опс"
   AIOPS: "эй ай опс"
   AI-RCA: "эй ай ар си эй"
+  ITSM-стек: "ай ти эс эм стэк"
   ITSM: "ай ти эс эм"
+  стеком: "стэком"
+  стека: "стэка"
+  стеке: "стэке"
+  стеку: "стэку"
+  стек: "стэк"
+  "red teaming": "ред тиминг"
+  "service bulletin": "сервис буллетин"
   I&O: "ай энд оу"
   RACI: "рэйси"
   TCO: "ти си оу"

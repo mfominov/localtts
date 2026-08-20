@@ -254,6 +254,53 @@
       color: #f4ffe0;
     }
 
+    .reader-table {
+      width: 100%;
+      margin: 1.1rem 0 1.25rem;
+      border-collapse: collapse;
+      font-size: 0.92em;
+      line-height: 1.45;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: rgba(12, 20, 18, 0.35);
+    }
+    .reader-table th,
+    .reader-table td {
+      padding: 0.55rem 0.7rem;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+    .reader-table th {
+      font-family: "Outfit", sans-serif;
+      font-weight: 600;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--mark);
+      background: rgba(216, 245, 106, 0.08);
+    }
+    .reader-table tr:nth-child(even) td {
+      background: rgba(231, 240, 234, 0.03);
+    }
+    .reader-table tr:last-child th,
+    .reader-table tr:last-child td {
+      border-bottom: 0;
+    }
+    .reader-table tr.sentence {
+      border-radius: 0;
+      padding: 0;
+    }
+    .reader-table tr.sentence.active {
+      background: var(--mark-soft);
+      box-shadow: none;
+    }
+    .reader-table tr.sentence.active th,
+    .reader-table tr.sentence.active td {
+      color: #f4ffe0;
+    }
+
     .progress-rail {
       grid-column: 3;
       grid-row: 1;
@@ -775,7 +822,53 @@
       }
     }
 
-    function loadChapter(index, { autoplay = false, startAt = 0 } = {}) {
+    function isTableRowCue(text) {
+      return / \| /.test(String(text || ""));
+    }
+
+    function parseTableRowCells(text) {
+      return String(text || "")
+        .replace(/[.!?…]+$/u, "")
+        .split(" | ")
+        .map((cell) => cell.trim())
+        .filter(Boolean);
+    }
+
+    function appendSectionHeading(section) {
+      const heading = document.createElement("h3");
+      heading.className = "section-heading";
+      const parts = headingLabel(section);
+      heading.innerHTML = `<span class="sec-id">${parts.id}</span>${parts.text}`;
+      heading.addEventListener("click", () =>
+        seekTo(section.start + 0.01, { play: true })
+      );
+      textEl.appendChild(heading);
+    }
+
+    function appendTableGroup(chapter, start, end, sectionByCue) {
+      const table = document.createElement("table");
+      table.className = "reader-table";
+      const firstCells = parseTableRowCells(chapter.cues[start].text);
+      const firstIsHeader = !firstCells.some((cell) => /\d\s*%|\d+%/.test(cell));
+      for (let i = start; i < end; i++) {
+        const cue = chapter.cues[i];
+        const section = sectionByCue.get(i);
+        if (section) appendSectionHeading(section);
+        const tr = document.createElement("tr");
+        tr.className = "sentence";
+        tr.dataset.index = String(i);
+        const tag = i === start && firstIsHeader ? "th" : "td";
+        parseTableRowCells(cue.text).forEach((cell) => {
+          const el = document.createElement(tag);
+          el.textContent = displayText(cell);
+          tr.appendChild(el);
+        });
+        tr.addEventListener("click", () => seekTo(cue.start + 0.01, { play: true }));
+        table.appendChild(tr);
+        sentenceNodes[i] = tr;
+      }
+      textEl.appendChild(table);
+    }
       currentIndex = index;
       const chapter = manifest.chapters[index];
       titleEl.textContent = chapter.title;
@@ -789,30 +882,33 @@
       const sectionByCue = new Map(
         (chapter.sections || []).map((section) => [section.cueIndex, section])
       );
-      sentenceNodes = chapter.cues.map((cue, i) => {
-        const section = sectionByCue.get(i);
-        if (section) {
-          const heading = document.createElement("h3");
-          heading.className = "section-heading";
-          const parts = headingLabel(section);
-          heading.innerHTML = `<span class="sec-id">${parts.id}</span>${parts.text}`;
-          heading.addEventListener("click", () =>
-            seekTo(section.start + 0.01, { play: true })
-          );
-          textEl.appendChild(heading);
+      sentenceNodes = new Array(chapter.cues.length);
+      let cueIdx = 0;
+      while (cueIdx < chapter.cues.length) {
+        if (isTableRowCue(chapter.cues[cueIdx].text)) {
+          let end = cueIdx + 1;
+          while (end < chapter.cues.length && isTableRowCue(chapter.cues[end].text)) {
+            end += 1;
+          }
+          appendTableGroup(chapter, cueIdx, end, sectionByCue);
+          cueIdx = end;
+          continue;
         }
-
+        const cue = chapter.cues[cueIdx];
+        const section = sectionByCue.get(cueIdx);
+        if (section) appendSectionHeading(section);
         const span = document.createElement("span");
         span.className = "sentence";
-        span.dataset.index = String(i);
+        span.dataset.index = String(cueIdx);
         const bodyText = section
           ? stripSectionPrefix(cue.text, section)
           : cue.text;
         span.textContent = displayText(bodyText || cue.text) + " ";
         span.addEventListener("click", () => seekTo(cue.start + 0.01, { play: true }));
         textEl.appendChild(span);
-        return span;
-      });
+        sentenceNodes[cueIdx] = span;
+        cueIdx += 1;
+      }
 
       chaptersEl.querySelectorAll(".chapter-block").forEach((block, i) => {
         block.classList.toggle("open", i === index);

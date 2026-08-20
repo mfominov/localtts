@@ -13,7 +13,9 @@ Pre-synth Russian spoken forms for numbers so Silero does not misread digits, da
 - Order: §-digits → words → **pronounce:** → **NUM** (so `GPT-3.5` is not eaten as a decimal)
 - In scope: integers (incl. `1 500`), decimals (`,`/`.`), `%` inflection, `№`, `₽$€`, dates `ДД.ММ.ГГГГ` / `ДД.ММ.ГГ`
 - Also: comparisons `≥ ≤ >= <= ≠` before a number; years with prep `к/в/с/до/… 20XX году|года` (ordinal case)
-- Out of scope v1: ranges `10–20`, bare `<`/`>`, ordinals outside dates/year-prep
+- Also: genitive after `не менее/не более/более/менее/свыше/около/порядка/от/до` (`не менее 20%` → «двадцати процентов»)
+- Also: hyphen ordinals `1-е` / `2-й` / `3-я` / `1-го` (num2words gender+case)
+- Out of scope v1: ranges `10–20`, bare `<`/`>`, full prepositional government for every noun
 
 ## Acceptance
 
