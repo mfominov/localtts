@@ -8,7 +8,8 @@
 
 - Разовый офлайн: кандидаты → ChatGPT → ручной merge в `patterns/default.yml`
 - Только `pronounce:` (не homographs / не фразы)
-- Кандидаты: regex латиница, interesting (CAPS / CamelCase / цифры / `.-+`), частота ≥2, минус существующие ключи (casefold)
+- Кандидаты: regex латиница + Title-Case биграммы; interesting (CAPS / CamelCase / цифры / `.-+`); частота ≥2; **ALLCAPS 2–8 букв — уже с ×1**; минус существующие ключи (casefold)
+- Опционально `--from-log`: майнить `Silero skip (ValueError)` (×1 достаточно; URL/ID отфильтрованы)
 - Источник: PDF extract до pronounce/NUM, или TEXT до pronounce; не spoken `.txt` из OUT_DIR
 - Скрипт только печатает; не патчит YAML; без overwrite существующих
 - Ожидание: +10–25% комфорта на хвосте после review
@@ -18,4 +19,4 @@
 
 - Runtime / API LLM
 - Авто-apply в default.yml
-- Homographs, `≥`, падежи годов
+- Homographs, `≥`, падежи годов (уже в NUM)

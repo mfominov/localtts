@@ -8,6 +8,7 @@ FAVICON_SRC := web/favicon.svg
 
 PDF ?=
 TEXT ?=
+LOG ?=
 MIN_COUNT ?= 2
 OUT_DIR ?= output_audio
 VOICE ?= Milena
@@ -53,7 +54,7 @@ help:
 	@echo "  make listen-piper PDF=/path        - Piper chapters + open player"
 	@echo "  make listen-silero PDF=/path       - Silero chapters + open player"
 	@echo "  make draft-chapters PDF=/path      - draft {pdf}.chapters.txt from outline/TOC"
-	@echo "  make pronounce-candidates PDF=/path|TEXT=/path - Latin tokens for ChatGPT→pronounce YAML"
+	@echo "  make pronounce-candidates PDF=/path|TEXT=/path [LOG=log] - Latin/ValueError → ChatGPT pronounce YAML"
 	@echo "  make serve            - only open browser player for existing OUT_DIR"
 	@echo "  make play             - play OUT_DIR/playlist.m3u in VLC"
 	@echo "  make refresh-web      - update player + section markers without re-TTS"
@@ -73,7 +74,7 @@ help:
 	@echo "  SILERO_SAMPLE_RATE=$(SILERO_SAMPLE_RATE)"
 	@echo "  MAX_CHARS=$(MAX_CHARS) START_PAGE=$(START_PAGE) END_PAGE=$(END_PAGE)"
 	@echo "  CHAPTER_PAGES=$(CHAPTER_PAGES) CHAPTERS_FILE=$(CHAPTERS_FILE) PATTERNS_FILE=$(PATTERNS_FILE)"
-	@echo "  TEXT=$(TEXT) MIN_COUNT=$(MIN_COUNT)"
+	@echo "  TEXT=$(TEXT) LOG=$(LOG) MIN_COUNT=$(MIN_COUNT)"
 	@echo "  JOBS=$(JOBS) KEEP=$(KEEP) FORCE=$(FORCE) PORT=$(PORT)"
 	@echo "  COVER=$(COVER) COVER_PAGE=$(COVER_PAGE) BOOK_TITLE=$(BOOK_TITLE) BOOK_AUTHOR=$(BOOK_AUTHOR) BITRATE=$(BITRATE)"
 
@@ -259,9 +260,10 @@ draft-chapters:
 		--patterns-file "$(PATTERNS_FILE)"
 
 pronounce-candidates:
-	@if [ -z "$(PDF)" ] && [ -z "$(TEXT)" ]; then \
+	@if [ -z "$(PDF)" ] && [ -z "$(TEXT)" ] && [ -z "$(LOG)" ]; then \
 		echo "Usage: make pronounce-candidates PDF=/path/to/file.pdf"; \
 		echo "   or: make pronounce-candidates TEXT=/path/to/pre-pronounce.txt"; \
+		echo "   or: make pronounce-candidates LOG=./log [PDF=...|TEXT=...]"; \
 		exit 1; \
 	fi
 	@if [ -n "$(PDF)" ] && [ -n "$(TEXT)" ]; then \
@@ -273,17 +275,17 @@ pronounce-candidates:
 	else \
 		PY="$(PYTHON)"; \
 	fi; \
+	CMD="$$PY $(PRONOUNCE_CANDIDATES) --patterns-file \"$(PATTERNS_FILE)\" --min-count \"$(MIN_COUNT)\""; \
 	if [ -n "$(PDF)" ]; then \
-		$$PY $(PRONOUNCE_CANDIDATES) --pdf "$(PDF)" \
-			--patterns-file "$(PATTERNS_FILE)" \
-			--min-count "$(MIN_COUNT)" \
-			--start-page "$(START_PAGE)" \
-			--end-page "$(END_PAGE)"; \
-	else \
-		$$PY $(PRONOUNCE_CANDIDATES) --text "$(TEXT)" \
-			--patterns-file "$(PATTERNS_FILE)" \
-			--min-count "$(MIN_COUNT)"; \
-	fi
+		CMD="$$CMD --pdf \"$(PDF)\" --start-page \"$(START_PAGE)\" --end-page \"$(END_PAGE)\""; \
+	fi; \
+	if [ -n "$(TEXT)" ]; then \
+		CMD="$$CMD --text \"$(TEXT)\""; \
+	fi; \
+	if [ -n "$(LOG)" ]; then \
+		CMD="$$CMD --from-log \"$(LOG)\""; \
+	fi; \
+	eval $$CMD
 
 refresh-web:
 	@if [ -x "$(BIN)/python" ]; then \
