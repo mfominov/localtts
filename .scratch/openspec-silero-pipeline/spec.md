@@ -12,14 +12,13 @@
 - Next slice: **RU v1** — done (`.scratch/silero-homographs/spec.md`).
 - Then: **pauses/chunk B** — done (`.scratch/silero-pauses/spec.md`); **C dialogue** — done (`.scratch/silero-dialogue/spec.md`).
 - **Status (2026-08-18):** OpenSpec cherry-pick **paused**. Near-term = ear-driven `pronounce:` / `homographs:`.
-- **Status (2026-08-20):** Next engineered slice after pronounce settles: **`ruaccent`** (grilled; spec `.scratch/silero-ruaccent/spec.md`). Code gated on maintainer `go stress`.
-- **Preferred next after pronounce:** external stress resolver (`ruaccent`) — see silero-ruaccent spec.
+- **Status (2026-08-20):** **`ruaccent` done** (`.scratch/silero-ruaccent/`). Default on for Silero; opt-out `silero.ruaccent: false`.
+- **Preferred next if backlog reopens:** repeatability-based headers/footers.
 - Near-term **non-goals:** Speech IR, OCR, LUFS/reverb, full SSML adapter, full ABBR expansions, pymupdf table finder.
 
 ### Backlog (from OpenSpec, unscheduled)
 
-- External stress resolver (`ruaccent`) ← preferred next after pronounce (spec ready)
-- Repeatability-based headers/footers
+- Repeatability-based headers/footers ← preferred next
 - OCR fallback + garbage filter
 - `chapters.json` IR
 - Table narration (first slice: row pauses + HTML in player; not pymupdf find_tables)

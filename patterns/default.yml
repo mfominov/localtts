@@ -42,9 +42,12 @@ normalize_numbers: true
 
 # Silero-only: auto ё/stress flags (model defaults are already true) + optional +stress overrides.
 # Example: замок: "зам+ок"  (+ before the stressed vowel).
+# ruaccent: mass +stress before homographs; first run downloads HF models.
 silero:
   put_yo: true
   put_accent: true
+  ruaccent: true
+  ruaccent_model: turbo3.1
 
 homographs: {}
 

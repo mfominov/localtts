@@ -6,7 +6,7 @@
 
 ## Status
 
-Grilled 2026-08-20. **Не реализовывать**, пока pronounce-волна не успокоится и maintainer не скажет `go stress`.
+Implemented 2026-08-20 (`go stress`). Opt-out: `silero.ruaccent: false`.
 
 ## Decisions (grilling)
 

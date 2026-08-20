@@ -12,6 +12,7 @@ dependencies = [
     "pypdf>=4.0.0",
     "pyyaml>=6.0",
     "num2words>=0.5.13",
+    "ruaccent>=1.5.8",
 ]
 
 [project.optional-dependencies]

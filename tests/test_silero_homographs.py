@@ -78,6 +78,7 @@ skip_toc:
                 homographs={"замок": "зам+ок"},
                 put_yo=False,
                 put_accent=True,
+                ruaccent=False,
             )
             kwargs = model.apply_tts.call_args.kwargs
             self.assertFalse(kwargs["put_yo"])

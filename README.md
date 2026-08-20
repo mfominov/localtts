@@ -272,7 +272,7 @@ python3 pdf_to_audio.py ./doc.pdf --no-strip-page-artifacts
 - **Бренды и аббревиатуры** (`PSLC`, `ROI`, …) — секция `pronounce:`; подставляются только перед TTS.
 - **Новые кандидаты для словаря** — `make pronounce-candidates PDF=./doc.pdf` (или `TEXT=…`, опционально `LOG=./log`): латиница (частота ≥2; ALLCAPS вроде FAA — уже с ×1), Title-Case фразы, плюс `Silero skip (ValueError)` из лога. YAML-скелет и промпт для ChatGPT. Без API; вмержи в `patterns/default.yml` вручную. Не бери `OUT_DIR/*.txt` после TTS — там уже spoken.
 - **Числа / даты / % / валюта / `№`** — `normalize_numbers: true` в patterns; модуль `normalize_numbers.py` (только перед TTS). Также `≥`/`≤`, годы с предлогом (`к 2028 году`), родительный после «не менее/более…» (`не менее 20%` → «двадцати процентов»), порядковые `1-е`/`2-й`.
-- **Silero ё/ударения** — `silero.put_yo` / `silero.put_accent` (по умолчанию `true`). Омографы: `homographs:` с маркером `+` перед ударной гласной (`замок: "зам+ок"`); только для Silero.
+- **Silero ё/ударения** — `silero.put_yo` / `silero.put_accent` (по умолчанию `true`). Массовый stress: `silero.ruaccent: true` (пакет `ruaccent`, модель `silero.ruaccent_model`, default `turbo3.1`; первый запуск качает модели с Hugging Face). Порядок: pronounce → NUM → **ruaccent** → `homographs:`. Омографы вручную: `замок: "зам+ок"` (+ перед ударной гласной); только для Silero. Opt-out: `silero.ruaccent: false`.
 - **Паузы / chunk Silero** — секция `speech:` (`pauses.*_ms`, `silero_chunk_chars: 300`); тишина между клаузами, в т.ч. после пробельного тире (`dash_ms`) и чуть короче вокруг скобок (`paren_ms` до `(` и после `)`); без CLI gap. Нормализация чисел — до проверки speakable, чтобы `16% —` не пропускалось.
 - **Диалоги Silero** — `speech.dialogue.quote_before_ms` / `quote_after_ms` вокруг `«»`/`“”`/`"..."` (только тишина; say по-прежнему `[[slnc]]`/`[[pbas]]`).
 - **`§2.5.1` / `§4.1–4.9`** — в текст уходит `в разделе …` / `в разделах … — …`, перед TTS цифры словами; в плеере снова `§`. `см.` перед TTS → «смотри в».
@@ -287,6 +287,8 @@ normalize_numbers: true
 silero:
   put_yo: true
   put_accent: true
+  ruaccent: true
+  ruaccent_model: turbo3.1
 homographs:
   замок: "зам+ок"
 speech:

@@ -29,8 +29,12 @@ from typing import Any
 # Silero apply_tts is happier with shorter inputs; we stitch parts together.
 SILERO_MAX_CHARS = 300
 DEFAULT_SILERO_CHUNK_CHARS = 300
+DEFAULT_RUACCENT_MODEL = "turbo3.1"
 DEFAULT_PATTERNS_FILE = pathlib.Path(__file__).resolve().parent / "patterns" / "default.yml"
 _silero_lock = threading.Lock()
+_ruaccent_lock = threading.Lock()
+_ruaccentizer: Any = None
+_ruaccentizer_key: tuple[str, tuple[tuple[str, str], ...]] | None = None
 _silero_models: dict[str, Any] = {}
 
 _REGEX_FLAGS = {
@@ -399,6 +403,8 @@ class CleaningPatterns:
     normalize_numbers: bool = True
     silero_put_yo: bool = True
     silero_put_accent: bool = True
+    silero_ruaccent: bool = True
+    silero_ruaccent_model: str = DEFAULT_RUACCENT_MODEL
     homographs: dict[str, str] = field(default_factory=dict)
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS
     speech_pauses: SpeechPauses = field(default_factory=SpeechPauses)
@@ -475,6 +481,11 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         raise RuntimeError(f"Invalid silero section in {patterns_path}")
     silero_put_yo = bool(silero_raw.get("put_yo", True))
     silero_put_accent = bool(silero_raw.get("put_accent", True))
+    silero_ruaccent = bool(silero_raw.get("ruaccent", True))
+    silero_ruaccent_model = (
+        str(silero_raw.get("ruaccent_model") or DEFAULT_RUACCENT_MODEL).strip()
+        or DEFAULT_RUACCENT_MODEL
+    )
 
     homographs_raw = raw.get("homographs") or {}
     if homographs_raw and not isinstance(homographs_raw, dict):
@@ -518,6 +529,8 @@ def load_cleaning_patterns(path: pathlib.Path | None = None) -> CleaningPatterns
         normalize_numbers=normalize_numbers,
         silero_put_yo=silero_put_yo,
         silero_put_accent=silero_put_accent,
+        silero_ruaccent=silero_ruaccent,
+        silero_ruaccent_model=silero_ruaccent_model,
         homographs=homographs,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
@@ -760,11 +773,78 @@ def apply_pronounce_map(text: str, pronounce: dict[str, str] | None) -> str:
     return result
 
 
+def apply_homograph_overrides(text: str, homographs: dict[str, str] | None) -> str:
+    """Replace words by surface form, ignoring any existing `+` stress marks."""
+    if not homographs:
+        return text
+    lookup = {
+        key.casefold().replace("+", ""): value
+        for key, value in homographs.items()
+        if key.strip() and value.strip()
+    }
+    if not lookup:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        base = raw.replace("+", "").casefold()
+        return lookup.get(base, raw)
+
+    return re.sub(
+        r"(?<![A-Za-zА-Яа-яЁё0-9+])[A-Za-zА-Яа-яЁё+]+(?![A-Za-zА-Яа-яЁё0-9+])",
+        repl,
+        text,
+    )
+
+
+def _get_ruaccentizer(model_size: str, custom_dict: dict[str, str] | None) -> Any:
+    """Load RUAccent once per (model, custom_dict) key for the process."""
+    global _ruaccentizer, _ruaccentizer_key
+
+    mapping = dict(custom_dict or {})
+    key = (model_size, tuple(sorted(mapping.items())))
+    with _ruaccent_lock:
+        if _ruaccentizer is not None and _ruaccentizer_key == key:
+            return _ruaccentizer
+        try:
+            from ruaccent import RUAccent
+        except ImportError as exc:
+            raise RuntimeError(
+                "ruaccent is required for Silero stress. Install with: pip install -e ."
+            ) from exc
+        accentizer = RUAccent()
+        accentizer.load(
+            omograph_model_size=model_size,
+            use_dictionary=True,
+            custom_dict=mapping,
+            tiny_mode=False,
+        )
+        _ruaccentizer = accentizer
+        _ruaccentizer_key = key
+        return _ruaccentizer
+
+
+def apply_ruaccent(
+    text: str,
+    *,
+    model_size: str = DEFAULT_RUACCENT_MODEL,
+    custom_dict: dict[str, str] | None = None,
+) -> str:
+    """Mark Russian stress with `+` before the stressed vowel (Silero-compatible)."""
+    if not text.strip():
+        return text
+    accentizer = _get_ruaccentizer(model_size, custom_dict)
+    with _ruaccent_lock:
+        return str(accentizer.process_all(text))
+
+
 def prepare_tts_spoken_text(
     text: str,
     pronounce: dict[str, str] | None = None,
     *,
     normalize_numbers: bool = True,
+    ruaccent: bool = False,
+    ruaccent_model: str = DEFAULT_RUACCENT_MODEL,
     homographs: dict[str, str] | None = None,
 ) -> str:
     """TTS-only transforms; do not use for UI/cues storage."""
@@ -780,8 +860,14 @@ def prepare_tts_spoken_text(
     spoken = normalize_numbers_for_speech(spoken, enabled=normalize_numbers)
     # Table cells: keep `|` in cues/UI; speak as comma (short pause).
     spoken = _TABLE_PIPE_RE.sub(", ", spoken)
-    # Homograph +stress markers are Silero-only; callers pass homographs only for silero.
-    spoken = apply_pronounce_map(spoken, homographs)
+    # Mass stress then manual overrides (Silero-only; callers gate ruaccent/homographs).
+    if ruaccent:
+        spoken = apply_ruaccent(
+            spoken,
+            model_size=ruaccent_model,
+            custom_dict=homographs,
+        )
+    spoken = apply_homograph_overrides(spoken, homographs)
     return spoken
 
 
@@ -2037,6 +2123,8 @@ def synthesize_with_silero(
     homographs: dict[str, str] | None = None,
     put_yo: bool = True,
     put_accent: bool = True,
+    ruaccent: bool = True,
+    ruaccent_model: str = DEFAULT_RUACCENT_MODEL,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
     speech_dialogue: SpeechDialogue | None = None,
@@ -2080,6 +2168,8 @@ def synthesize_with_silero(
                     seg_text,
                     pronounce,
                     normalize_numbers=normalize_numbers,
+                    ruaccent=ruaccent,
+                    ruaccent_model=ruaccent_model,
                     homographs=homographs,
                 )
                 clauses = split_speech_clauses(tts_seg) or [tts_seg]
@@ -2192,6 +2282,8 @@ def synthesize_chunk(
     homographs: dict[str, str] | None = None,
     silero_put_yo: bool = True,
     silero_put_accent: bool = True,
+    silero_ruaccent: bool = True,
+    silero_ruaccent_model: str = DEFAULT_RUACCENT_MODEL,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
     speech_dialogue: SpeechDialogue | None = None,
@@ -2219,6 +2311,8 @@ def synthesize_chunk(
             homographs=homographs,
             put_yo=silero_put_yo,
             put_accent=silero_put_accent,
+            ruaccent=silero_ruaccent,
+            ruaccent_model=silero_ruaccent_model,
             silero_chunk_chars=silero_chunk_chars,
             speech_pauses=speech_pauses,
             speech_dialogue=speech_dialogue,
@@ -2268,6 +2362,8 @@ def synthesize_job(
     homographs: dict[str, str] | None = None,
     silero_put_yo: bool = True,
     silero_put_accent: bool = True,
+    silero_ruaccent: bool = True,
+    silero_ruaccent_model: str = DEFAULT_RUACCENT_MODEL,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
     speech_dialogue: SpeechDialogue | None = None,
@@ -2288,6 +2384,8 @@ def synthesize_job(
         homographs=homographs,
         silero_put_yo=silero_put_yo,
         silero_put_accent=silero_put_accent,
+        silero_ruaccent=silero_ruaccent,
+        silero_ruaccent_model=silero_ruaccent_model,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
         speech_dialogue=speech_dialogue,
@@ -2310,6 +2408,8 @@ def run_jobs(
     homographs: dict[str, str] | None = None,
     silero_put_yo: bool = True,
     silero_put_accent: bool = True,
+    silero_ruaccent: bool = True,
+    silero_ruaccent_model: str = DEFAULT_RUACCENT_MODEL,
     silero_chunk_chars: int = DEFAULT_SILERO_CHUNK_CHARS,
     speech_pauses: SpeechPauses | None = None,
     speech_dialogue: SpeechDialogue | None = None,
@@ -2328,6 +2428,8 @@ def run_jobs(
         homographs=homographs,
         silero_put_yo=silero_put_yo,
         silero_put_accent=silero_put_accent,
+        silero_ruaccent=silero_ruaccent,
+        silero_ruaccent_model=silero_ruaccent_model,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
         speech_dialogue=speech_dialogue,
@@ -2369,6 +2471,8 @@ def run_jobs(
                 homographs,
                 silero_put_yo,
                 silero_put_accent,
+                silero_ruaccent,
+                silero_ruaccent_model,
                 silero_chunk_chars,
                 speech_pauses,
                 speech_dialogue,
@@ -2922,6 +3026,8 @@ def main() -> int:
     homographs_map: dict[str, str] = {}
     silero_put_yo = True
     silero_put_accent = True
+    silero_ruaccent = True
+    silero_ruaccent_model = DEFAULT_RUACCENT_MODEL
     silero_chunk_chars = DEFAULT_SILERO_CHUNK_CHARS
     speech_pauses = SpeechPauses()
     speech_dialogue = SpeechDialogue()
@@ -2933,6 +3039,8 @@ def main() -> int:
         homographs_map = dict(speech_patterns.homographs)
         silero_put_yo = speech_patterns.silero_put_yo
         silero_put_accent = speech_patterns.silero_put_accent
+        silero_ruaccent = speech_patterns.silero_ruaccent
+        silero_ruaccent_model = speech_patterns.silero_ruaccent_model
         silero_chunk_chars = speech_patterns.silero_chunk_chars
         speech_pauses = speech_patterns.speech_pauses
         speech_dialogue = speech_patterns.speech_dialogue
@@ -2942,6 +3050,8 @@ def main() -> int:
         homographs_map = {}
         silero_put_yo = True
         silero_put_accent = True
+        silero_ruaccent = True
+        silero_ruaccent_model = DEFAULT_RUACCENT_MODEL
         silero_chunk_chars = DEFAULT_SILERO_CHUNK_CHARS
         speech_pauses = SpeechPauses()
         speech_dialogue = SpeechDialogue()
@@ -3030,6 +3140,8 @@ def main() -> int:
         homographs=homographs_map if args.engine == "silero" else None,
         silero_put_yo=silero_put_yo,
         silero_put_accent=silero_put_accent,
+        silero_ruaccent=silero_ruaccent if args.engine == "silero" else False,
+        silero_ruaccent_model=silero_ruaccent_model,
         silero_chunk_chars=silero_chunk_chars,
         speech_pauses=speech_pauses,
         speech_dialogue=speech_dialogue,
