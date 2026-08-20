@@ -89,7 +89,7 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertNotIn("Часть 2.", spoken)
 
     def test_bare_decimal_not_treated_as_heading(self) -> None:
-        spoken = ltts.prepare_tts_spoken_text("составляет 1.04 млрд")
+        spoken = ltts.prepare_tts_spoken_text("составляет 1.04 от базы")
         self.assertIn("целая", spoken)
         self.assertIn("сотых", spoken)
         self.assertNotIn("точка", spoken)
@@ -348,7 +348,32 @@ skip_toc:
             self.assertEqual(patterns.ai_spoken_as, "эй-ай")
             self.assertEqual(patterns.ii_spoken_as, "и-и")
 
-    def test_custom_pronounce_override(self) -> None:
+    def test_ear_batch_wiki_inference_lists(self) -> None:
+        text = ltts.apply_pronunciation_fixes(
+            "wiki-система с поиском - wiki, inference, Configuration Items, "
+            "nice-looking demo, ИИ-driven Knowledge Management, Identify gaps, "
+            "Recommend improvements, Draft articles, categorize",
+            self.patterns.ai_spoken_as,
+            self.patterns.ii_spoken_as,
+        )
+        spoken = ltts.prepare_tts_spoken_text(
+            text, self.patterns.pronounce, normalize_numbers=False, ruaccent=False
+        )
+        low = spoken.casefold()
+        self.assertIn("вики-система", low)
+        self.assertIn("вики", low)
+        self.assertIn("инференс", low)
+        self.assertIn("конфигьюрейшн айтемз", low)
+        self.assertIn("найс лукинг демо", low)
+        self.assertIn("и и дривен", low)
+        self.assertIn("нолидж менеджмент", low)
+        self.assertIn("айдентифай гэпс", low)
+        self.assertIn("рекоменд импрувментс", low)
+        self.assertIn("драфт артиклз", low)
+        self.assertIn("категорайз", low)
+        self.assertNotIn("inference", low)
+        self.assertNotIn("identify", low)
+
         yaml_text = """
 line_drop: []
 inline_sub: []

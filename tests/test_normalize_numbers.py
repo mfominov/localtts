@@ -65,6 +65,16 @@ class NormalizeNumbersTests(unittest.TestCase):
         self.assertIn("пятьсот", rub)
         self.assertIn("пятьдесят", rub)
 
+    def test_currency_with_scale_lossy(self) -> None:
+        spoken = normalize_numbers_for_speech("$1,04 млрд")
+        self.assertEqual(spoken, "примерно один миллиард долларов США")
+        self.assertNotIn("млрд", spoken.casefold())
+        self.assertNotIn("цент", spoken.casefold())
+        self.assertEqual(normalize_numbers_for_speech("2 млн"), "примерно два миллиона")
+        self.assertIn("тысяч", normalize_numbers_for_speech("5 тыс"))
+        suffix = normalize_numbers_for_speech("1,5 млрд$")
+        self.assertEqual(suffix, "примерно один миллиард долларов США")
+
     def test_numero(self) -> None:
         self.assertEqual(normalize_numbers_for_speech("акт №12"), "акт номер двенадцать")
 

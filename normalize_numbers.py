@@ -42,6 +42,34 @@ _CURRENCY_SUFFIX_RE = re.compile(
     r"(?![A-Za-zА-Яа-яЁё0-9])"
 )
 
+# $1,04 млрд / 1,04 млрд $ — before plain currency so scale is not left raw.
+_NUM_TOKEN = r"\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
+_SCALE_TOKEN = r"млрд|млн|тыс"
+
+_CURRENCY_SCALE_PREFIX_RE = re.compile(
+    rf"(?<![A-Za-zА-Яа-яЁё0-9])"
+    rf"(?P<sym>[$€₽])\s*(?P<num>{_NUM_TOKEN})"
+    rf"\s*(?P<scale>{_SCALE_TOKEN})\.?"
+    rf"(?![A-Za-zА-Яа-яЁё0-9])",
+    flags=re.IGNORECASE,
+)
+
+_CURRENCY_SCALE_SUFFIX_RE = re.compile(
+    rf"(?<![A-Za-zА-Яа-яЁё0-9])"
+    rf"(?P<num>{_NUM_TOKEN})"
+    rf"\s*(?P<scale>{_SCALE_TOKEN})\.?\s*(?P<sym>[$€₽])"
+    rf"(?![A-Za-zА-Яа-яЁё0-9])",
+    flags=re.IGNORECASE,
+)
+
+_NUM_SCALE_RE = re.compile(
+    rf"(?<![A-Za-zА-Яа-яЁё0-9])"
+    rf"(?P<num>{_NUM_TOKEN})"
+    rf"\s*(?P<scale>{_SCALE_TOKEN})\.?"
+    rf"(?![A-Za-zА-Яа-яЁё0-9])",
+    flags=re.IGNORECASE,
+)
+
 _PERCENT_RE = re.compile(
     r"(?<![A-Za-zА-Яа-яЁё0-9])"
     r"(?:(?P<pre>не\s+менее|не\s+более|более|менее|свыше|около|порядка|от|до)\s+)?"
@@ -104,6 +132,20 @@ _INTEGER_RE = re.compile(
 )
 
 _SYM_TO_CURRENCY = {"$": "USD", "€": "EUR", "₽": "RUB"}
+
+# After scale noun, currency is genitive plural («миллиард долларов США»).
+_CURRENCY_AFTER_SCALE = {
+    "USD": "долларов США",
+    "EUR": "евро",
+    "RUB": "рублей",
+}
+
+_SCALE_FORMS = {
+    # (1, 2-4, 5+)
+    "млрд": ("миллиард", "миллиарда", "миллиардов"),
+    "млн": ("миллион", "миллиона", "миллионов"),
+    "тыс": ("тысяча", "тысячи", "тысяч"),
+}
 
 _COMPARE_WORDS = {
     "≥": "больше или равно",
@@ -245,6 +287,40 @@ def _speak_currency(raw: str, symbol: str) -> str:
     return spoken
 
 
+def _lossy_scale_count(amount: Decimal) -> int:
+    """Integer magnitude for «примерно N миллиард…» (drop fractional cents-of-a-billion)."""
+    if amount < 0:
+        amount = -amount
+    n = int(amount)
+    if n == 0 and amount > 0:
+        return 1
+    return n
+
+
+def _scale_noun(n: int, scale: str) -> str:
+    key = scale.casefold().rstrip(".")
+    forms = _SCALE_FORMS[key]
+    n_abs = abs(n) % 100
+    n1 = n_abs % 10
+    if 11 <= n_abs <= 14:
+        return forms[2]
+    if n1 == 1:
+        return forms[0]
+    if n1 in (2, 3, 4):
+        return forms[1]
+    return forms[2]
+
+
+def _speak_scaled_amount(raw: str, scale: str, symbol: str | None = None) -> str:
+    amount = _parse_number_token(raw)
+    n = _lossy_scale_count(amount)
+    spoken = f"примерно {_cardinal(n)} {_scale_noun(n, scale)}"
+    if symbol:
+        code = _SYM_TO_CURRENCY[symbol]
+        spoken = f"{spoken} {_CURRENCY_AFTER_SCALE[code]}"
+    return spoken
+
+
 def _normalize_year(year: int) -> int:
     if year < 100:
         return 2000 + year if year < 70 else 1900 + year
@@ -307,6 +383,24 @@ def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
         except (InvalidOperation, ValueError):
             return match.group(0)
 
+    def sub_currency_scale(match: re.Match[str]) -> str:
+        try:
+            return park(
+                _speak_scaled_amount(
+                    match.group("num"),
+                    match.group("scale"),
+                    match.group("sym"),
+                )
+            )
+        except (InvalidOperation, ValueError, KeyError):
+            return match.group(0)
+
+    def sub_num_scale(match: re.Match[str]) -> str:
+        try:
+            return park(_speak_scaled_amount(match.group("num"), match.group("scale")))
+        except (InvalidOperation, ValueError, KeyError):
+            return match.group(0)
+
     def sub_percent(match: re.Match[str]) -> str:
         try:
             case = "g" if match.group("pre") else "n"
@@ -357,8 +451,11 @@ def normalize_numbers_for_speech(text: str, enabled: bool = True) -> str:
 
     result = text
     result = _DATE_RE.sub(sub_date, result)
+    result = _CURRENCY_SCALE_PREFIX_RE.sub(sub_currency_scale, result)
+    result = _CURRENCY_SCALE_SUFFIX_RE.sub(sub_currency_scale, result)
     result = _CURRENCY_PREFIX_RE.sub(sub_currency, result)
     result = _CURRENCY_SUFFIX_RE.sub(sub_currency, result)
+    result = _NUM_SCALE_RE.sub(sub_num_scale, result)
     result = _PERCENT_RE.sub(sub_percent, result)
     result = _NUMERO_RE.sub(sub_numero, result)
     result = _COMPARE_RE.sub(sub_compare, result)
