@@ -11,18 +11,19 @@
 - First slice: **NUM v1** — done (`normalize_numbers.py`).
 - Next slice: **RU v1** — done (`.scratch/silero-homographs/spec.md`).
 - Then: **pauses/chunk B** — done (`.scratch/silero-pauses/spec.md`); **C dialogue** — done (`.scratch/silero-dialogue/spec.md`).
-- **Status (2026-08-18):** OpenSpec cherry-pick **paused**. Further work = ear-driven `pronounce:` / `homographs:` only.
-- **Preferred next if backlog reopens:** repeatability-based headers/footers.
+- **Status (2026-08-18):** OpenSpec cherry-pick **paused**. Near-term = ear-driven `pronounce:` / `homographs:`.
+- **Status (2026-08-20):** Next engineered slice after pronounce settles: **`ruaccent`** (grilled; spec `.scratch/silero-ruaccent/spec.md`). Code gated on maintainer `go stress`.
+- **Preferred next after pronounce:** external stress resolver (`ruaccent`) — see silero-ruaccent spec.
 - Near-term **non-goals:** Speech IR, OCR, tables, LUFS/reverb, full SSML adapter, full ABBR expansions.
 
 ### Backlog (from OpenSpec, unscheduled)
 
-- Repeatability-based headers/footers ← preferred next
+- External stress resolver (`ruaccent`) ← preferred next after pronounce (spec ready)
+- Repeatability-based headers/footers
 - OCR fallback + garbage filter
 - `chapters.json` IR
 - Table narration
 - Full abbreviation expansion + context tiers
-- External stress resolver (`ruaccent`) beyond Silero flags/homographs
 - Dash-dialogue / speaker-switch for Silero (beyond quote silence)
 - Speech IR + Silero Adapter
 - Per-chunk retry + diagnostic event schema
