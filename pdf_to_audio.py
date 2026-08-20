@@ -1751,7 +1751,11 @@ def split_sentences(text: str) -> list[str]:
     start = 0
     for match in re.finditer(r"[.!?…]+(?=\s+|$)", text):
         idx = match.start()
-        if text[idx] == "." and _dot_is_part_heading(text, idx):
+        if text[idx] == "." and (
+            _dot_is_part_heading(text, idx)
+            or _dot_is_inside_dotted_number(text, idx)
+            or _dot_is_ordered_list_marker(text, idx)
+        ):
             continue
         chunk = text[start : match.end()].strip()
         if chunk:
@@ -1766,6 +1770,25 @@ def split_sentences(text: str) -> list[str]:
 def _dot_is_inside_dotted_number(text: str, idx: int) -> bool:
     """True for the dot in `1.3` / `0.90`, not a sentence period."""
     return idx > 0 and idx + 1 < len(text) and text[idx - 1].isdigit() and text[idx + 1].isdigit()
+
+
+def _dot_is_ordered_list_marker(text: str, idx: int) -> bool:
+    """True for the period in `1. Title` / `2. Есть` (ordered list), not a sentence end."""
+    if idx == 0 or not text[idx - 1].isdigit():
+        return False
+    j = idx - 1
+    while j >= 0 and text[j].isdigit():
+        j -= 1
+    if idx - j - 1 > 3:
+        return False
+    if j >= 0 and (text[j].isalnum() or text[j] in ".-"):
+        return False
+    k = idx + 1
+    if k >= len(text) or not text[k].isspace():
+        return False
+    while k < len(text) and text[k].isspace():
+        k += 1
+    return k < len(text) and not text[k].isdigit()
 
 
 def _dot_is_part_heading(text: str, idx: int) -> bool:
@@ -1820,7 +1843,9 @@ def split_speech_clauses(text: str) -> list[str]:
             continue
         if ch in ".!?,;:—":
             if ch == "." and (
-                _dot_is_inside_dotted_number(text, idx) or _dot_is_part_heading(text, idx)
+                _dot_is_inside_dotted_number(text, idx)
+                or _dot_is_part_heading(text, idx)
+                or _dot_is_ordered_list_marker(text, idx)
             ):
                 continue
             emit("".join(buf))
@@ -2299,8 +2324,12 @@ def synthesize_with_silero(
                             continue
                         if not is_speakable_for_silero(part):
                             skipped += 1
+                            ctx = re.sub(r"\s+", " ", seg_text).strip()
+                            if len(ctx) > 100:
+                                ctx = ctx[:97] + "..."
                             print(
-                                f"Silero skip (not speakable) in {output_file.name}: {part!r}",
+                                f"Silero skip (not speakable) in {output_file.name}: "
+                                f"{part!r} ← {ctx!r}",
                                 flush=True,
                             )
                             continue

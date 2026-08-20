@@ -81,6 +81,15 @@ class SpeechPausesTests(unittest.TestCase):
         self.assertTrue(any("первое" in c for c in clauses))
         self.assertNotIn("1.", clauses)
 
+    def test_sentence_split_keeps_ordered_list_marker(self) -> None:
+        sentences = ltts.split_sentences(
+            "Правило: 1. Первый вопрос. Потом конец. 2. Второй вопрос здесь."
+        )
+        self.assertTrue(any("1. Первый" in s for s in sentences))
+        self.assertTrue(any("2. Второй" in s for s in sentences))
+        self.assertNotIn("1.", sentences)
+        self.assertNotIn("2.", sentences)
+
     def test_pause_ms_mapping(self) -> None:
         pauses = ltts.SpeechPauses()
         self.assertEqual(ltts.pause_ms_after_text("да,", pauses), 150)

@@ -8,7 +8,8 @@
 
 - Форма: средний род (`первое` / `второе` / …) через `num2words` ordinal `gender=n`
 - Паттерн: `N.` + пробел + текст; **не** трогать `1.3` (нет пробела после первой точки → остаётся `expand_heading_section_numbers`)
-- Срабатывает на маркерах списка в spoken-тексте (начало / после паузы-контекста); порядок TTS: после heading/part expand, до pronounce/NUM
+- Срабатывает на маркерах списка в spoken-тексте; `split_sentences` / `split_speech_clauses` не режут по точке в `1. Title` (иначе сироты `'1.'` до expand)
+- Порядок TTS: после heading/part expand, до pronounce/NUM
 - Замена: `1. Identify` → `первое — Identify` (тире → пауза/клауза; `1.3` не матчится)
 - OpenSpec backlog не двигаем; это ear-fix срез 1 из трёх
 
