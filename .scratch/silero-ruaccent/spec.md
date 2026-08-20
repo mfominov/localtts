@@ -20,6 +20,7 @@ Implemented 2026-08-20 (`go stress`). Opt-out: `silero.ruaccent: false`.
 - Silero `put_accent` / `put_yo` остаются `true` (страховка вместе с pre-marked `+`)
 - Load accentizer once per process; модели с HF при первом `load`, дальше кэш
 - Chunk long unpunctuated clauses (~1200 chars) before `process_all`; on ONNX errors skip chunk + reload session (JOBS>1 must not crash the run)
+- Patch ONNX `session.run` to inject zero `token_type_ids` (transformers 5+ omits them; ruaccent accent/stress models still require)
 - Бюджет: до **+30%** wall time на главу (Mac CPU) — замерить на приёмке
 - Старт кода: явная команда maintainer **`go stress`** (не число N глав)
 

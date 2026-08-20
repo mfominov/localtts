@@ -821,6 +821,38 @@ def apply_homograph_overrides(text: str, homographs: dict[str, str] | None) -> s
     )
 
 
+def _patch_ruaccent_onnx_token_types(accentizer: Any) -> None:
+    """transformers 5+ may omit token_type_ids; some ruaccent ONNX models still require them."""
+    import numpy as np
+
+    for attr in ("accent_model", "stress_usage_predictor"):
+        model = getattr(accentizer, attr, None)
+        session = getattr(model, "session", None) if model is not None else None
+        if session is None:
+            continue
+        needed = {inp.name for inp in session.get_inputs()}
+        if "token_type_ids" not in needed:
+            continue
+        if getattr(session, "_localtts_token_type_patch", False):
+            continue
+        original_run = session.run
+
+        def run(
+            output_names: Any,
+            input_feed: Any,
+            *args: Any,
+            _orig=original_run,
+            **kwargs: Any,
+        ) -> Any:
+            feed = dict(input_feed)
+            if "token_type_ids" not in feed and "input_ids" in feed:
+                feed["token_type_ids"] = np.zeros_like(feed["input_ids"])
+            return _orig(output_names, feed, *args, **kwargs)
+
+        session.run = run  # type: ignore[method-assign]
+        session._localtts_token_type_patch = True
+
+
 def _get_ruaccentizer(model_size: str, custom_dict: dict[str, str] | None) -> Any:
     """Load RUAccent once per (model, custom_dict) key for the process.
 
@@ -845,6 +877,7 @@ def _get_ruaccentizer(model_size: str, custom_dict: dict[str, str] | None) -> An
         custom_dict=mapping,
         tiny_mode=False,
     )
+    _patch_ruaccent_onnx_token_types(accentizer)
     _ruaccentizer = accentizer
     _ruaccentizer_key = key
     return _ruaccentizer

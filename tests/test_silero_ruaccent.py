@@ -74,18 +74,26 @@ skip_toc:
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 100)
 
+    def test_ruaccent_puts_stress_with_token_type_patch(self) -> None:
+        # Fresh singleton — exercise real load + transformers 5 token_type_ids patch.
+        ltts._ruaccentizer = None
+        ltts._ruaccentizer_key = None
+        spoken = ltts.apply_ruaccent("на двери висит замок.")
+        self.assertIn("+", spoken)
+        self.assertIn("зам", spoken.casefold())
+
     def test_ruaccent_onnx_failure_falls_back(self) -> None:
         accentizer = mock.Mock()
         accentizer.process_all.side_effect = RuntimeError("onnx boom")
 
         with mock.patch.object(ltts, "_get_ruaccentizer", return_value=accentizer):
-            # Reset any live singleton so reload stays on the mock.
             ltts._ruaccentizer = None
             ltts._ruaccentizer_key = None
             out = ltts.apply_ruaccent("короткий текст")
         self.assertEqual(out, "короткий текст")
         accentizer.process_all.assert_called()
 
+    def test_apply_ruaccent_passes_custom_dict_to_loader(self) -> None:
         accentizer = mock.Mock()
         accentizer.process_all.return_value = "зам+ок"
 
