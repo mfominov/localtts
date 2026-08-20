@@ -196,6 +196,24 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("гигачат", low)
         self.assertIn("квен", low)
 
+    def test_pronounce_agent_ops_phrases(self) -> None:
+        text = (
+            "Zero Trust Tiny Team OpenAI Claude Kubernetes Naumen "
+            "Guardian Agents Evidence Bundle AgentOps Cursor"
+        )
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("зиро траст", low)
+        self.assertIn("тайни тим", low)
+        self.assertIn("оупен эй ай", low)
+        self.assertIn("клод", low)
+        self.assertIn("кубернетес", low)
+        self.assertIn("наумен", low)
+        self.assertIn("гардиан эйджентс", low)
+        self.assertIn("эвидэнс бандл", low)
+        self.assertIn("эйджент опс", low)
+        self.assertIn("кёрсор", low)
+
     def test_pslc_footer_inline_stripped(self) -> None:
         raw = (
             "Потолки отчитываются от единственного канона; любое "
