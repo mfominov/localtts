@@ -36,4 +36,9 @@ chapters.txt
 # Piper voice assets (large; keep local)
 models/*.onnx
 models/*.onnx.json
+models/f5_ref_ru.txt
 !models/.gitkeep
+
+# Local tool caches and downloaded catalogs
+.ansible/
+latest_silero_models.yml
