@@ -238,6 +238,9 @@
       opacity: 0.85;
       font-variant-numeric: tabular-nums;
     }
+    .sentence-heading-only {
+      display: none;
+    }
 
     .sentence {
       border-radius: 0.3em;
@@ -377,6 +380,62 @@
       display: flex;
       gap: 0.45rem;
       align-items: center;
+    }
+
+    .speed {
+      display: flex;
+      align-items: center;
+      gap: 0.15rem;
+      margin-left: 0.35rem;
+      padding: 0.15rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(231, 240, 234, 0.04);
+    }
+    .speed-step,
+    .speed-value {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+    }
+    .speed-step {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      color: var(--text-dim);
+      font-size: 1.05rem;
+      line-height: 1;
+      display: grid;
+      place-items: center;
+    }
+    .speed-step:hover,
+    .speed-value:hover {
+      color: var(--mark);
+      background: rgba(216, 245, 106, 0.1);
+    }
+    .speed-step:disabled {
+      opacity: 0.35;
+      cursor: default;
+      background: transparent;
+      color: var(--text-dim);
+    }
+    .speed-value {
+      min-width: 3.1rem;
+      height: 28px;
+      border-radius: 999px;
+      color: var(--mark);
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+    .speed-step:focus-visible,
+    .speed-value:focus-visible {
+      outline: 2px solid rgba(216, 245, 106, 0.65);
+      outline-offset: 1px;
     }
 
     .btn {
@@ -552,6 +611,11 @@
         <button class="btn" id="next" type="button" title="Следующая глава" aria-label="Следующая глава">
           <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
         </button>
+        <div class="speed" role="group" aria-label="Скорость воспроизведения">
+          <button type="button" class="speed-step" id="speedDown" title="Медленнее ([)" aria-label="Медленнее">−</button>
+          <button type="button" class="speed-value" id="speedValue" title="Сброс на 1×" aria-live="polite">1×</button>
+          <button type="button" class="speed-step" id="speedUp" title="Быстрее (])" aria-label="Быстрее">+</button>
+        </div>
       </div>
 
       <div class="scrub">
@@ -589,15 +653,21 @@
     const progressFill = document.getElementById("progressFill");
     const progressThumb = document.getElementById("progressThumb");
     const progressLabel = document.getElementById("progressLabel");
+    const speedDownBtn = document.getElementById("speedDown");
+    const speedUpBtn = document.getElementById("speedUp");
+    const speedValueBtn = document.getElementById("speedValue");
 
     const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
     const ICON_PAUSE = '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>';
+    const SPEED_KEY = "localtts-playback-rate";
+    const SPEED_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
     let manifest = null;
     let currentIndex = 0;
     let currentSectionId = null;
     let sentenceNodes = [];
     let seeking = false;
+    let playbackRate = 1;
     // Highlight slightly behind wall-clock audio; estimates still drift a bit.
     const HIGHLIGHT_LAG_SEC = 0.45;
 
@@ -606,6 +676,48 @@
       const m = Math.floor(sec / 60);
       const s = Math.floor(sec % 60);
       return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function formatRate(rate) {
+      const rounded = Math.round(rate * 100) / 100;
+      return `${String(rounded).replace(/\.0$/, "")}×`;
+    }
+
+    function nearestRate(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return 1;
+      return SPEED_RATES.reduce((best, rate) =>
+        Math.abs(rate - num) < Math.abs(best - num) ? rate : best
+      );
+    }
+
+    function readStoredRate() {
+      try {
+        return nearestRate(localStorage.getItem(SPEED_KEY));
+      } catch (_) {
+        return 1;
+      }
+    }
+
+    function applyPlaybackRate(rate, { persist = true } = {}) {
+      playbackRate = nearestRate(rate);
+      audioEl.playbackRate = playbackRate;
+      if ("preservesPitch" in audioEl) audioEl.preservesPitch = true;
+      if ("webkitPreservesPitch" in audioEl) audioEl.webkitPreservesPitch = true;
+      speedValueBtn.textContent = formatRate(playbackRate);
+      speedDownBtn.disabled = playbackRate <= SPEED_RATES[0];
+      speedUpBtn.disabled = playbackRate >= SPEED_RATES[SPEED_RATES.length - 1];
+      if (persist) {
+        try {
+          localStorage.setItem(SPEED_KEY, String(playbackRate));
+        } catch (_) {}
+      }
+    }
+
+    function stepPlaybackRate(delta) {
+      const idx = Math.max(0, SPEED_RATES.indexOf(playbackRate));
+      const next = SPEED_RATES[Math.max(0, Math.min(SPEED_RATES.length - 1, idx + delta))];
+      applyPlaybackRate(next);
     }
 
     function speechWeight(text) {
@@ -738,22 +850,44 @@
       return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 
-    function stripSectionPrefix(text, section) {
-      let body = String(text || "").trim();
-      const sectionId = section.id;
-      body = body.replace(
-        new RegExp(`^[\\s\\[\\(\«\"']*${escapeRegExp(sectionId)}\\.?\\s+`, "i"),
-        ""
-      );
-      const titleText = headingLabel(section).text.replace(/…$/, "").trim();
-      if (titleText) {
-        const titlePattern = new RegExp(
-          `^${escapeRegExp(titleText)}(?:\\s*[.!?…:—–-]\\s*|\\s+)`,
-          "i"
-        );
-        body = body.replace(titlePattern, "");
+    function tokenizeHeading(value) {
+      const words = String(value || "")
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .match(/[a-zа-я0-9]+/g);
+      return words ? words.slice() : [];
+    }
+
+    function stripLeadingTokens(text, tokens) {
+      const remaining = tokens.slice();
+      const src = String(text || "");
+      if (!remaining.length || !src.trim()) {
+        return { rest: src.trim(), tokens: remaining };
       }
-      return body.trim();
+      const re = /[A-Za-zА-Яа-яЁё0-9]+|[^\sA-Za-zА-Яа-яЁё0-9]+|\s+/g;
+      let last = 0;
+      let matchedAny = false;
+      let match;
+      while (remaining.length && (match = re.exec(src))) {
+        const chunk = match[0];
+        if (/[A-Za-zА-Яа-яЁё0-9]/.test(chunk)) {
+          const word = chunk.toLowerCase().replace(/ё/g, "е");
+          const want = remaining[0].replace(/ё/g, "е");
+          if (word !== want) break;
+          remaining.shift();
+          matchedAny = true;
+          last = match.index + chunk.length;
+        } else if (matchedAny || match.index === 0) {
+          last = match.index + chunk.length;
+        } else {
+          break;
+        }
+      }
+      if (!matchedAny) return { rest: src.trim(), tokens: tokens.slice() };
+      return {
+        rest: src.slice(last).replace(/^[\s.:;,—–-]+/, "").trim(),
+        tokens: remaining,
+      };
     }
 
     function headingLabel(section) {
@@ -764,6 +898,12 @@
         id: section.id,
         text: raw,
       };
+    }
+
+    function stripSectionPrefix(text, section) {
+      const parts = headingLabel(section);
+      const headingTokens = tokenizeHeading(`${parts.id} ${parts.text}`.replace(/…$/, ""));
+      return stripLeadingTokens(text, headingTokens).rest;
     }
 
     function seekTo(time, { play = true } = {}) {
@@ -869,6 +1009,8 @@
       }
       textEl.appendChild(table);
     }
+
+    function loadChapter(index, { autoplay = false, startAt = 0 } = {}) {
       currentIndex = index;
       const chapter = manifest.chapters[index];
       titleEl.textContent = chapter.title;
@@ -883,6 +1025,7 @@
         (chapter.sections || []).map((section) => [section.cueIndex, section])
       );
       sentenceNodes = new Array(chapter.cues.length);
+      let chapterTitleTokens = tokenizeHeading(displayText(chapter.title || ""));
       let cueIdx = 0;
       while (cueIdx < chapter.cues.length) {
         if (isTableRowCue(chapter.cues[cueIdx].text)) {
@@ -900,10 +1043,23 @@
         const span = document.createElement("span");
         span.className = "sentence";
         span.dataset.index = String(cueIdx);
-        const bodyText = section
+        let bodyText = section
           ? stripSectionPrefix(cue.text, section)
-          : cue.text;
-        span.textContent = displayText(bodyText || cue.text) + " ";
+          : String(cue.text || "").trim();
+        if (chapterTitleTokens.length) {
+          const stripped = stripLeadingTokens(bodyText, chapterTitleTokens);
+          if (stripped.tokens.length < chapterTitleTokens.length) {
+            bodyText = stripped.rest;
+            chapterTitleTokens = stripped.tokens;
+          } else {
+            chapterTitleTokens = [];
+          }
+        }
+        if (bodyText) {
+          span.textContent = displayText(bodyText) + " ";
+        } else {
+          span.classList.add("sentence-heading-only");
+        }
         span.addEventListener("click", () => seekTo(cue.start + 0.01, { play: true }));
         textEl.appendChild(span);
         sentenceNodes[cueIdx] = span;
@@ -944,10 +1100,13 @@
         else break;
       }
       sentenceNodes.forEach((node, i) => {
+        if (!node) return;
         const on = i === active;
         if (node.classList.contains("active") === on) return;
         node.classList.toggle("active", on);
-        if (on) node.scrollIntoView({ block: "center", behavior: "smooth" });
+        if (on && !node.classList.contains("sentence-heading-only")) {
+          node.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
       });
 
       const section = activeSectionForTime(chapter, syncTime);
@@ -1010,6 +1169,21 @@
         loadChapter(currentIndex + 1, { autoplay: true });
       }
     });
+    speedDownBtn.addEventListener("click", () => stepPlaybackRate(-1));
+    speedUpBtn.addEventListener("click", () => stepPlaybackRate(1));
+    speedValueBtn.addEventListener("click", () => applyPlaybackRate(1));
+    document.addEventListener("keydown", (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const tag = String(event.target?.tagName || "");
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (event.key === "[") {
+        event.preventDefault();
+        stepPlaybackRate(-1);
+      } else if (event.key === "]") {
+        event.preventDefault();
+        stepPlaybackRate(1);
+      }
+    });
 
     seekEl.addEventListener("pointerdown", () => { seeking = true; });
     seekEl.addEventListener("pointerup", () => {
@@ -1024,7 +1198,10 @@
 
     progressTrack.addEventListener("click", seekFromProgressEvent);
 
-    audioEl.addEventListener("play", () => setPlayingUi(true));
+    audioEl.addEventListener("play", () => {
+      setPlayingUi(true);
+      applyPlaybackRate(playbackRate, { persist: false });
+    });
     audioEl.addEventListener("pause", () => setPlayingUi(false));
     audioEl.addEventListener("timeupdate", () => {
       if (!seeking) {
@@ -1034,6 +1211,7 @@
       highlightAt(audioEl.currentTime);
     });
     audioEl.addEventListener("loadedmetadata", () => {
+      applyPlaybackRate(playbackRate, { persist: false });
       if (Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
         seekEl.max = String(audioEl.duration);
         durTimeEl.textContent = formatTime(audioEl.duration);
@@ -1056,6 +1234,7 @@
         manifest = retimeManifest(data);
         if (!manifest.chapters?.length) throw new Error("В manifest нет глав.");
         renderSidebar();
+        applyPlaybackRate(readStoredRate());
         loadChapter(0);
       })
       .catch((err) => {
