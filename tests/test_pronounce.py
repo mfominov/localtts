@@ -82,6 +82,12 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertNotIn("целых", spoken)
         self.assertNotIn("десятых", spoken)
 
+    def test_part_heading_number_spoken(self) -> None:
+        spoken = ltts.prepare_tts_spoken_text("Часть 2. Архитектурное ядро PSLC.")
+        self.assertIn("Часть два.", spoken)
+        self.assertIn("Архитектурное", spoken)
+        self.assertNotIn("Часть 2.", spoken)
+
     def test_bare_decimal_not_treated_as_heading(self) -> None:
         spoken = ltts.prepare_tts_spoken_text("составляет 1.04 млрд")
         self.assertIn("целая", spoken)

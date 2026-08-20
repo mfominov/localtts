@@ -30,6 +30,12 @@ class SpeechPausesTests(unittest.TestCase):
             ["AI-Disrupt и GenAI"],
         )
 
+    def test_part_heading_number_stays_with_title_clause(self) -> None:
+        self.assertEqual(
+            ltts.split_speech_clauses("Часть 2. Архитектурное ядро PSLC."),
+            ["Часть 2. Архитектурное ядро PSLC."],
+        )
+
     def test_dotted_section_number_stays_one_clause(self) -> None:
         self.assertEqual(
             ltts.split_speech_clauses("1.3 Стоимость ошибки."),

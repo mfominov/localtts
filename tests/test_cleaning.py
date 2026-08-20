@@ -131,6 +131,46 @@ skip_toc:
         self.assertTrue(sentences[1].startswith("Распространённая"))
         self.assertEqual(ltts.pause_ms_after_text(sentences[0], ltts.SpeechPauses()), 400)
 
+    def test_detach_glued_part_heading(self) -> None:
+        glued = (
+            "Часть 2. Архитектурное ядро PSLC Настоящая часть переходит "
+            "от экономического обоснования."
+        )
+        detached = ltts.detach_glued_part_headings(glued)
+        self.assertIn("PSLC.", detached)
+        self.assertIn(". Настоящая часть", detached)
+        sentences = ltts.split_sentences(detached)
+        self.assertGreaterEqual(len(sentences), 2)
+        self.assertTrue(sentences[0].startswith("Часть 2."))
+        self.assertIn("Архитектурное ядро PSLC", sentences[0])
+        self.assertTrue(sentences[1].startswith("Настоящая часть"))
+
+    def test_split_sentences_keeps_part_number_with_title(self) -> None:
+        sentences = ltts.split_sentences(
+            "Часть 2. Архитектурное ядро PSLC. Настоящая часть переходит дальше."
+        )
+        self.assertEqual(
+            sentences,
+            [
+                "Часть 2. Архитектурное ядро PSLC.",
+                "Настоящая часть переходит дальше.",
+            ],
+        )
+        self.assertNotIn("Часть 2.", sentences)
+
+    def test_part_heading_pipeline_does_not_orphan_number(self) -> None:
+        raw = "ЧАСТЬ Часть 2. Архитектурное ядро PSLC Настоящая часть переходит дальше."
+        text = ltts.polish_extracted_text(ltts.normalize_text(raw))
+        sentences = ltts.split_sentences(text)
+        self.assertTrue(any("Часть 2." in part and "Архитектурное" in part for part in sentences))
+        clauses: list[str] = []
+        for sentence in sentences:
+            spoken = ltts.prepare_tts_spoken_text(sentence)
+            clauses.extend(ltts.split_speech_clauses(spoken))
+        self.assertTrue(any("два" in part for part in clauses))
+        self.assertFalse(any(part.strip() in {"2.", "Часть 2."} for part in clauses))
+        self.assertTrue(all(ltts.is_speakable_for_silero(part) for part in clauses))
+
     def test_detach_heading_after_latin_token(self) -> None:
         glued = (
             "1.3 Стоимость ошибки агента в производстве – на порядок выше "

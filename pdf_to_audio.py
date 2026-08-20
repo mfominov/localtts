@@ -283,6 +283,22 @@ _HEADING_SECTION_NUM_RE = re.compile(
     r"(?=\.?\s+[A-ZА-ЯЁ])"
 )
 
+_GLUED_PART_HEADING_RE = re.compile(
+    r"(?P<label>(?i:часть|глава|раздел|приложение)\s+\d+)\.\s+"
+    r"(?P<title>[A-ZА-ЯЁA-Za-z][^.]{0,200}?(?<=[а-яёa-zA-Z0-9\)]))"
+    r"\s+"
+    r"(?P<body>[А-ЯЁ][а-яё]{3,})"
+)
+
+_PART_HEADING_NUM_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9])"
+    r"(?P<label>часть|глава|раздел|приложение)\s+(?P<num>\d+)"
+    r"(?=\.)",
+    flags=re.IGNORECASE,
+)
+
+_PART_HEADING_LABEL_RE = re.compile(r"(?i)(?:часть|глава|раздел|приложение)\s+\d+$")
+
 
 def collapse_allcaps_echo(text: str) -> str:
     """Drop an ALL-CAPS label immediately echoed in title case (`ЧАСТЬ Часть` → `Часть`)."""
@@ -305,10 +321,21 @@ def detach_glued_section_headings(text: str) -> str:
     return _GLUED_SECTION_HEADING_RE.sub(repl, text)
 
 
+def detach_glued_part_headings(text: str) -> str:
+    """Insert a period between `Часть 2. Title` and the following sentence."""
+
+    def repl(match: re.Match[str]) -> str:
+        title = match.group("title").strip(" .:;,—-")
+        return f"{match.group('label')}. {title}. {match.group('body')}"
+
+    return _GLUED_PART_HEADING_RE.sub(repl, text)
+
+
 def polish_extracted_text(text: str) -> str:
     """Post-join extract fixes that affect both the reader and TTS."""
     text = collapse_allcaps_echo(text)
-    return detach_glued_section_headings(text)
+    text = detach_glued_section_headings(text)
+    return detach_glued_part_headings(text)
 
 
 def expand_heading_section_numbers(text: str) -> str:
@@ -319,6 +346,15 @@ def expand_heading_section_numbers(text: str) -> str:
         return " точка ".join(int_to_ru_words(int(part)) for part in parts)
 
     return _HEADING_SECTION_NUM_RE.sub(repl, text)
+
+
+def expand_part_heading_numbers(text: str) -> str:
+    """Turn `Часть 2.` into `Часть два.` so Silero does not skip `'2.'`."""
+
+    def repl(match: re.Match[str]) -> str:
+        return f"{match.group('label')} {int_to_ru_words(int(match.group('num')))}"
+
+    return _PART_HEADING_NUM_RE.sub(repl, text)
 
 
 @dataclass
@@ -736,6 +772,7 @@ def prepare_tts_spoken_text(
 
     spoken = expand_section_references(text)
     spoken = expand_heading_section_numbers(spoken)
+    spoken = expand_part_heading_numbers(spoken)
     spoken = expand_section_ref_digits_to_words(spoken)
     spoken = expand_sm_abbreviation(spoken)
     # Pronounce before NUM so tokens like GPT-3.5 / R0-R5 are not eaten as decimals.
@@ -1505,13 +1542,37 @@ def split_sentences(text: str) -> list[str]:
     text = strip_speech_markup(text)
     if not text:
         return []
-    parts = re.split(r"(?<=[.!?…])\s+", text)
-    return [part.strip() for part in parts if part.strip()]
+    parts: list[str] = []
+    start = 0
+    for match in re.finditer(r"[.!?…]+(?=\s+|$)", text):
+        idx = match.start()
+        if text[idx] == "." and _dot_is_part_heading(text, idx):
+            continue
+        chunk = text[start : match.end()].strip()
+        if chunk:
+            parts.append(chunk)
+        start = match.end()
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 def _dot_is_inside_dotted_number(text: str, idx: int) -> bool:
     """True for the dot in `1.3` / `0.90`, not a sentence period."""
     return idx > 0 and idx + 1 < len(text) and text[idx - 1].isdigit() and text[idx + 1].isdigit()
+
+
+def _dot_is_part_heading(text: str, idx: int) -> bool:
+    """True for the period in `Часть 2. Архитектурное`, not a sentence end."""
+    if idx + 1 >= len(text):
+        return False
+    j = idx + 1
+    while j < len(text) and text[j].isspace():
+        j += 1
+    if j >= len(text) or not text[j].isupper():
+        return False
+    return _PART_HEADING_LABEL_RE.search(text[:idx].rstrip()) is not None
 
 
 def split_speech_clauses(text: str) -> list[str]:
@@ -1549,7 +1610,9 @@ def split_speech_clauses(text: str) -> list[str]:
             buf = []
             continue
         if ch in ".!?,;:—":
-            if ch == "." and _dot_is_inside_dotted_number(text, idx):
+            if ch == "." and (
+                _dot_is_inside_dotted_number(text, idx) or _dot_is_part_heading(text, idx)
+            ):
                 continue
             emit("".join(buf))
             buf = []
