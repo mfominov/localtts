@@ -274,6 +274,28 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("эйджент опс", low)
         self.assertIn("кёрсор", low)
 
+    def test_pronounce_valueerror_batch2(self) -> None:
+        text = (
+            "A/B/C Bitbucket Salesforce OpsWorker VictoriaMetrics "
+            "Composable Delivery Guardian Operator Site Reliability Engineer "
+            "inside the loop design time run time pods latency"
+        )
+        spoken = ltts.prepare_tts_spoken_text(text, self.patterns.pronounce)
+        low = spoken.casefold()
+        self.assertIn("эй би си", low)
+        self.assertIn("битбакет", low)
+        self.assertIn("сейлсфорс", low)
+        self.assertIn("опс воркер", low)
+        self.assertIn("виктория метрикс", low)
+        self.assertIn("компоузэбл деливери", low)
+        self.assertIn("гардиан оперейтор", low)
+        self.assertIn("сайт рилайабилити инжинир", low)
+        self.assertIn("инсайд зэ луп", low)
+        self.assertIn("дизайн тайм", low)
+        self.assertIn("ран тайм", low)
+        self.assertIn("подс", low)
+        self.assertIn("лейтенси", low)
+
     def test_pslc_footer_inline_stripped(self) -> None:
         raw = (
             "Потолки отчитываются от единственного канона; любое "
