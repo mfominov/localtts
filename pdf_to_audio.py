@@ -303,6 +303,14 @@ _PART_HEADING_NUM_RE = re.compile(
 
 _PART_HEADING_LABEL_RE = re.compile(r"(?i)(?:часть|глава|раздел|приложение)\s+\d+$")
 
+# Numbered list `1. Title` (not `1.3` — digit immediately after the dot).
+# After extract, newlines are often flattened to spaces, so allow any non-alnum boundary.
+_LIST_ITEM_MARKER_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9.])"
+    r"(\d{1,3})\."
+    r"(?=\s+\S)"
+)
+
 
 def collapse_allcaps_echo(text: str) -> str:
     """Drop an ALL-CAPS label immediately echoed in title case (`ЧАСТЬ Часть` → `Часть`)."""
@@ -359,6 +367,20 @@ def expand_part_heading_numbers(text: str) -> str:
         return f"{match.group('label')} {int_to_ru_words(int(match.group('num')))}"
 
     return _PART_HEADING_NUM_RE.sub(repl, text)
+
+
+def expand_numbered_list_markers(text: str) -> str:
+    """Turn list markers `1. Title` into `первое — Title` (neuter ordinal + pause)."""
+    from num2words import num2words
+
+    def repl(match: re.Match[str]) -> str:
+        n = int(match.group(1))
+        spoken = num2words(n, lang="ru", to="ordinal", gender="n")
+        # Leading dash (when not at start) ends the previous item clause before the ordinal.
+        prefix = "" if match.start() == 0 else "— "
+        return f"{prefix}{spoken} —"
+
+    return _LIST_ITEM_MARKER_RE.sub(repl, text)
 
 
 @dataclass
@@ -853,6 +875,7 @@ def prepare_tts_spoken_text(
     spoken = expand_section_references(text)
     spoken = expand_heading_section_numbers(spoken)
     spoken = expand_part_heading_numbers(spoken)
+    spoken = expand_numbered_list_markers(spoken)
     spoken = expand_section_ref_digits_to_words(spoken)
     spoken = expand_sm_abbreviation(spoken)
     # Pronounce before NUM so tokens like GPT-3.5 / R0-R5 are not eaten as decimals.

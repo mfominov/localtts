@@ -76,9 +76,10 @@ class SpeechPausesTests(unittest.TestCase):
         self.assertTrue(any("цитата" in part for part in clauses))
         self.assertTrue(any(part.startswith("дальше") for part in clauses))
 
-    def test_list_markers_still_own_clause(self) -> None:
-        clauses = ltts.split_speech_clauses("1. пункт два.")
-        self.assertIn("1.", clauses)
+    def test_list_markers_become_ordinal_clause(self) -> None:
+        clauses = ltts.split_speech_clauses(ltts.expand_numbered_list_markers("1. пункт два."))
+        self.assertTrue(any("первое" in c for c in clauses))
+        self.assertNotIn("1.", clauses)
 
     def test_pause_ms_mapping(self) -> None:
         pauses = ltts.SpeechPauses()

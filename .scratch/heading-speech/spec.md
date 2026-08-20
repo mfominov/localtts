@@ -17,9 +17,9 @@
 
 ## Out of scope
 
-- Нумерованные списки `1. 2. 3.` (по-прежнему not speakable)
 - Римские `Часть II`
 - Speed / hotkeys / localStorage (`.scratch/player-playback/`)
+- (lists `1. 2. 3.` → see `.scratch/numbered-list-speech/`)
 
 ## Acceptance
 
