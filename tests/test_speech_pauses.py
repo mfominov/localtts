@@ -30,6 +30,18 @@ class SpeechPausesTests(unittest.TestCase):
             ["AI-Disrupt и GenAI"],
         )
 
+    def test_dotted_section_number_stays_one_clause(self) -> None:
+        self.assertEqual(
+            ltts.split_speech_clauses("1.3 Стоимость ошибки."),
+            ["1.3 Стоимость ошибки."],
+        )
+        self.assertEqual(
+            ltts.split_speech_clauses("порог 0.90 на тестах."),
+            ["порог 0.90 на тестах."],
+        )
+        clauses = ltts.split_speech_clauses("1.3 Стоимость ошибки.")
+        self.assertNotIn("1.", clauses)
+
     def test_pause_ms_mapping(self) -> None:
         pauses = ltts.SpeechPauses()
         self.assertEqual(ltts.pause_ms_after_text("да,", pauses), 150)

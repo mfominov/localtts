@@ -34,6 +34,31 @@ class PronounceHelpersTests(unittest.TestCase):
         self.assertIn("три точка четыре", tts)
         self.assertNotIn("4 точка", tts)
 
+    def test_detach_heading_before_ii_spoken(self) -> None:
+        glued = (
+            "1.4 ИИ не сокращает затраты — он перестраивает их структуру "
+            "Распространённая управленческая ошибка — ждать."
+        )
+        text = ltts.polish_extracted_text(glued)
+        text = ltts.apply_pronunciation_fixes(text, "эй ай", "и и")
+        sentences = ltts.split_sentences(text)
+        self.assertTrue(sentences[0].startswith("1.4"))
+        self.assertTrue(any(s.startswith("Распространённая") for s in sentences))
+        self.assertIn("и и", sentences[0])
+
+    def test_heading_section_number_spoken_not_decimal(self) -> None:
+        spoken = ltts.prepare_tts_spoken_text("1.3 Стоимость ошибки.")
+        self.assertIn("один точка три", spoken)
+        self.assertIn("Стоимость", spoken)
+        self.assertNotIn("целых", spoken)
+        self.assertNotIn("десятых", spoken)
+
+    def test_bare_decimal_not_treated_as_heading(self) -> None:
+        spoken = ltts.prepare_tts_spoken_text("составляет 1.04 млрд")
+        self.assertIn("целая", spoken)
+        self.assertIn("сотых", spoken)
+        self.assertNotIn("точка", spoken)
+
     def test_pronounce_brands(self) -> None:
         text = "AI-DISRUPT PSLC и PDLC дают ROI для CIO"
         # Extract-time AI fix first (as in pipeline).

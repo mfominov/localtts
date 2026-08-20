@@ -102,6 +102,56 @@ skip_toc:
             toc_sample = "Содержание\n1 .... 2\n3 .... 4\n5 .... 6\n7 .... 8"
             self.assertFalse(ltts.is_toc_page(toc_sample, patterns))
 
+    def test_collapse_allcaps_chapter_echo(self) -> None:
+        self.assertEqual(
+            ltts.collapse_allcaps_echo("ЧАСТЬ Часть 2. Архитектурное ядро PSLC"),
+            "Часть 2. Архитектурное ядро PSLC",
+        )
+        self.assertEqual(
+            ltts.collapse_allcaps_echo("РЕЗЮМЕ Резюме для руководства"),
+            "Резюме для руководства",
+        )
+        # Different words must stay.
+        self.assertEqual(
+            ltts.collapse_allcaps_echo("PSLC Часть 2"),
+            "PSLC Часть 2",
+        )
+
+    def test_detach_glued_section_heading(self) -> None:
+        glued = (
+            "1.4 ИИ не сокращает затраты — он перестраивает их структуру "
+            "Распространённая управленческая ошибка — ждать."
+        )
+        detached = ltts.detach_glued_section_headings(glued)
+        self.assertIn("структуру.", detached)
+        self.assertIn(". Распространённая", detached)
+        sentences = ltts.split_sentences(detached)
+        self.assertGreaterEqual(len(sentences), 2)
+        self.assertTrue(sentences[0].startswith("1.4"))
+        self.assertTrue(sentences[1].startswith("Распространённая"))
+        self.assertEqual(ltts.pause_ms_after_text(sentences[0], ltts.SpeechPauses()), 400)
+
+    def test_detach_heading_after_latin_token(self) -> None:
+        glued = (
+            "1.3 Стоимость ошибки агента в производстве – на порядок выше "
+            "стоимости ошибки в IDE Ошибка агента в разработке стоит одну итерацию."
+        )
+        detached = ltts.detach_glued_section_headings(glued)
+        self.assertIn("IDE.", detached)
+        self.assertIn(". Ошибка агента", detached)
+
+    def test_subsection_pipeline_does_not_orphan_one(self) -> None:
+        raw = (
+            "1.3 Стоимость ошибки агента в производстве – на порядок выше "
+            "стоимости ошибки в IDE Ошибка агента в разработке стоит одну итерацию."
+        )
+        text = ltts.polish_extracted_text(ltts.normalize_text(raw))
+        clauses: list[str] = []
+        for sentence in ltts.split_sentences(text):
+            clauses.extend(ltts.split_speech_clauses(sentence))
+        self.assertNotIn("1.", clauses)
+        self.assertTrue(any(part.startswith("1.3") for part in clauses))
+
 
 if __name__ == "__main__":
     unittest.main()

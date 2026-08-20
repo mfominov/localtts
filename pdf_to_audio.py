@@ -207,6 +207,65 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+_ALLCAPS_ECHO_RE = re.compile(r"\b([A-ZА-ЯЁ]{3,})\s+([A-ZА-ЯЁ][a-zа-яё]+)\b")
+
+# Heading title ends, next sentence starts with a capital Russian word.
+_HEADING_BODY_SPLIT_RE = re.compile(r"(?<=[а-яёa-zA-Z0-9\)])\s+(?=[А-ЯЁ][а-яё]{3,})")
+
+_GLUED_SECTION_HEADING_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9.-])"
+    r"(?P<num>\d+(?:\.\d+){1,3})"
+    r"\.?"
+    r"\s+"
+    r"(?P<title>[A-ZА-ЯЁA-Za-z][^.]{0,200}?(?<=[а-яёa-zA-Z0-9\)]))"
+    r"\s+"
+    r"(?P<body>[А-ЯЁ][а-яё]{3,})"
+)
+
+_HEADING_SECTION_NUM_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё0-9.-])"
+    r"(\d+(?:\.\d+){1,3})"
+    r"(?=\.?\s+[A-ZА-ЯЁ])"
+)
+
+
+def collapse_allcaps_echo(text: str) -> str:
+    """Drop an ALL-CAPS label immediately echoed in title case (`ЧАСТЬ Часть` → `Часть`)."""
+
+    def repl(match: re.Match[str]) -> str:
+        if match.group(1).casefold() == match.group(2).casefold():
+            return match.group(2)
+        return match.group(0)
+
+    return _ALLCAPS_ECHO_RE.sub(repl, text)
+
+
+def detach_glued_section_headings(text: str) -> str:
+    """Insert a period between a `1.3 Title` heading and the following sentence."""
+
+    def repl(match: re.Match[str]) -> str:
+        title = match.group("title").strip(" .:;,—-")
+        return f"{match.group('num')} {title}. {match.group('body')}"
+
+    return _GLUED_SECTION_HEADING_RE.sub(repl, text)
+
+
+def polish_extracted_text(text: str) -> str:
+    """Post-join extract fixes that affect both the reader and TTS."""
+    text = collapse_allcaps_echo(text)
+    return detach_glued_section_headings(text)
+
+
+def expand_heading_section_numbers(text: str) -> str:
+    """Turn heading `1.3 Title` into `один точка три Title` so NUM does not read a decimal."""
+
+    def repl(match: re.Match[str]) -> str:
+        parts = match.group(1).split(".")
+        return " точка ".join(int_to_ru_words(int(part)) for part in parts)
+
+    return _HEADING_SECTION_NUM_RE.sub(repl, text)
+
+
 @dataclass
 class SkipTocConfig:
     enabled: bool = True
@@ -590,6 +649,7 @@ def prepare_tts_spoken_text(
     from normalize_numbers import normalize_numbers_for_speech
 
     spoken = expand_section_references(text)
+    spoken = expand_heading_section_numbers(spoken)
     spoken = expand_section_ref_digits_to_words(spoken)
     # Pronounce before NUM so tokens like GPT-3.5 / R0-R5 are not eaten as decimals.
     spoken = apply_pronounce_map(spoken, pronounce)
@@ -778,13 +838,14 @@ def extract_pages_text(
                 skipped_toc += 1
                 continue
             text = strip_page_artifacts(text, cleaning)
-        text = apply_pronunciation_fixes(
-            text,
+        # Heading polish needs original capitals (ИИ / ALL CAPS) before spoken replacements.
+        normalized = polish_extracted_text(normalize_text(text))
+        normalized = apply_pronunciation_fixes(
+            normalized,
             ai_spoken_as=speech.ai_spoken_as,
             ii_spoken_as=speech.ii_spoken_as,
         )
-        text = expand_section_references(text)
-        normalized = normalize_text(text)
+        normalized = expand_section_references(normalized)
         if strip_artifacts and cleaning is not None:
             normalized = strip_inline_page_artifacts(normalized, cleaning)
         if stylize_quotes:
@@ -1353,6 +1414,11 @@ def split_sentences(text: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
+def _dot_is_inside_dotted_number(text: str, idx: int) -> bool:
+    """True for the dot in `1.3` / `0.90`, not a sentence period."""
+    return idx > 0 and idx + 1 < len(text) and text[idx - 1].isdigit() and text[idx + 1].isdigit()
+
+
 def split_speech_clauses(text: str) -> list[str]:
     """Split on ,.!?;:— keeping the trailing punctuation on each clause.
 
@@ -1366,9 +1432,11 @@ def split_speech_clauses(text: str) -> list[str]:
     text = re.sub(r"(?<=\S)\s*[-–—]\s+(?=\S)", "—", text)
     clauses: list[str] = []
     buf: list[str] = []
-    for ch in text:
+    for idx, ch in enumerate(text):
         buf.append(ch)
         if ch in ".!?,;:—":
+            if ch == "." and _dot_is_inside_dotted_number(text, idx):
+                continue
             clause = "".join(buf).strip()
             if clause:
                 clauses.append(clause)
@@ -1502,11 +1570,7 @@ def _short_section_title(number: str, title_tail: str) -> str:
     title_tail = re.sub(r"\s+", " ", title_tail).strip()
     title_tail = re.split(r"(?<=\w)[.!?…]\s+", title_tail, maxsplit=1)[0]
     title_tail = re.split(r"\s+[—–]\s+", title_tail, maxsplit=1)[0]
-    title_tail = re.split(
-        r"(?<=[а-яёa-z0-9\)])\s+(?=[А-ЯЁ][а-яё]{3,})",
-        title_tail,
-        maxsplit=1,
-    )[0]
+    title_tail = _HEADING_BODY_SPLIT_RE.split(title_tail, maxsplit=1)[0]
     title_tail = title_tail.strip(" .:;,—-")
     words = title_tail.split()
     if len(words) > 10:
