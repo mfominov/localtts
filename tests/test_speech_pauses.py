@@ -48,6 +48,20 @@ class SpeechPausesTests(unittest.TestCase):
         clauses = ltts.split_speech_clauses("1.3 Стоимость ошибки.")
         self.assertNotIn("1.", clauses)
 
+    def test_file_extension_dot_stays_one_clause(self) -> None:
+        self.assertEqual(
+            ltts.split_speech_clauses("Скрипт (init.sh); и NOTES.md дальше."),
+            ["Скрипт", "(init.sh);", "и NOTES.md дальше."],
+        )
+        self.assertEqual(
+            ltts.split_speech_clauses("см. (progress.md) и sh."),
+            ["см.", "(progress.md)", "и sh."],
+        )
+        sentences = ltts.split_sentences("Пишем в NOTES.md и progress.md. Потом (init.sh) готов.")
+        self.assertTrue(any("NOTES.md" in s and "progress.md" in s for s in sentences))
+        self.assertTrue(any("(init.sh)" in s for s in sentences))
+        self.assertFalse(any(s.strip() in {"md", "sh", "md.", "sh."} for s in sentences))
+
     def test_orphan_punct_glues_or_drops(self) -> None:
         self.assertEqual(ltts.split_speech_clauses(", дальше."), ["дальше."])
         self.assertEqual(ltts.split_speech_clauses("."), [])

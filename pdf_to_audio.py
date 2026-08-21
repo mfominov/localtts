@@ -1786,6 +1786,7 @@ def split_sentences(text: str) -> list[str]:
             _dot_is_part_heading(text, idx)
             or _dot_is_inside_dotted_number(text, idx)
             or _dot_is_ordered_list_marker(text, idx)
+            or _dot_is_file_extension(text, idx)
         ):
             continue
         chunk = text[start : match.end()].strip()
@@ -1801,6 +1802,85 @@ def split_sentences(text: str) -> list[str]:
 def _dot_is_inside_dotted_number(text: str, idx: int) -> bool:
     """True for the dot in `1.3` / `0.90`, not a sentence period."""
     return idx > 0 and idx + 1 < len(text) and text[idx - 1].isdigit() and text[idx + 1].isdigit()
+
+
+_FILE_EXT_WHITELIST = frozenset(
+    {
+        "md",
+        "sh",
+        "py",
+        "yml",
+        "yaml",
+        "json",
+        "txt",
+        "toml",
+        "js",
+        "ts",
+        "tsx",
+        "jsx",
+        "go",
+        "rs",
+        "rb",
+        "java",
+        "kt",
+        "cpp",
+        "hpp",
+        "cc",
+        "cs",
+        "php",
+        "sql",
+        "xml",
+        "html",
+        "css",
+        "scss",
+        "vue",
+        "swift",
+        "ipynb",
+        "proto",
+        "gradle",
+        "kts",
+        "dart",
+        "lua",
+        "ex",
+        "exs",
+        "erl",
+        "hs",
+        "scala",
+        "clj",
+        "cljs",
+        "zig",
+        "nim",
+        "bat",
+        "cmd",
+        "ps1",
+        "zsh",
+        "bash",
+        "fish",
+        "ini",
+        "cfg",
+        "conf",
+        "env",
+        "lock",
+        "mod",
+        "nix",
+        "mdx",
+    }
+)
+
+
+def _dot_is_file_extension(text: str, idx: int) -> bool:
+    """True for the dot in `init.sh` / `NOTES.md`, not a sentence period."""
+    if idx <= 0 or idx + 1 >= len(text):
+        return False
+    if not (text[idx - 1].isalnum() or text[idx - 1] in "_-"):
+        return False
+    j = idx + 1
+    while j < len(text) and text[j].isascii() and text[j].isalpha():
+        j += 1
+    ext = text[idx + 1 : j].casefold()
+    if not (2 <= len(ext) <= 5) or ext not in _FILE_EXT_WHITELIST:
+        return False
+    return not (j < len(text) and (text[j].isalnum() or text[j] in "_-"))
 
 
 def _dot_is_ordered_list_marker(text: str, idx: int) -> bool:
@@ -1877,6 +1957,7 @@ def split_speech_clauses(text: str) -> list[str]:
                 _dot_is_inside_dotted_number(text, idx)
                 or _dot_is_part_heading(text, idx)
                 or _dot_is_ordered_list_marker(text, idx)
+                or _dot_is_file_extension(text, idx)
             ):
                 continue
             emit("".join(buf))

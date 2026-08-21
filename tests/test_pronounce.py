@@ -348,6 +348,30 @@ skip_toc:
             self.assertEqual(patterns.ai_spoken_as, "эй-ай")
             self.assertEqual(patterns.ii_spoken_as, "и-и")
 
+    def test_pdlc_valueerror_batch_and_filenames(self) -> None:
+        text = (
+            "Harness layer, Assume breach, NeuralStackly, DigiDai, "
+            "init.sh, NOTES.md, progress.md, Enterprise Deployment Gap, "
+            "Peak of Inflated Expectations"
+        )
+        spoken = ltts.prepare_tts_spoken_text(
+            text, self.patterns.pronounce, normalize_numbers=False, ruaccent=False
+        )
+        low = spoken.casefold()
+        self.assertIn("харнесс лэйер", low)
+        self.assertIn("эссюм брич", low)
+        self.assertIn("нюрал стэкли", low)
+        self.assertIn("диджи дай", low)
+        self.assertIn("инит эс эйч", low)
+        self.assertIn("ноутс эм ди", low)
+        self.assertIn("прогресс эм ди", low)
+        self.assertIn("энтерпрайз диплоймент гэп", low)
+        self.assertIn("пик оф инфлейтид экспектейшнс", low)
+        # Fragment workarounds must not be global pronounce keys.
+        self.assertNotIn("md", self.patterns.pronounce)
+        self.assertNotIn("sh", self.patterns.pronounce)
+        self.assertNotIn("file", self.patterns.pronounce)
+
     def test_ear_batch_wiki_inference_lists(self) -> None:
         text = ltts.apply_pronunciation_fixes(
             "wiki-система с поиском - wiki, inference, Configuration Items, "
